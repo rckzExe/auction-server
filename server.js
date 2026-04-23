@@ -6,9 +6,9 @@ const app = express();
 app.use(express.json());
 
 // =========================
-// 🔥 FIREBASE
+// 🔥 FIREBASE (RAILWAY FIX)
 // =========================
-const serviceAccount = require("./serviceAccountKey.json");
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -20,7 +20,7 @@ const db = admin.database();
 // =========================
 // 🧠 GLOBAL STATE
 // =========================
-const connections = {}; // multiple users
+const connections = {};
 const processed = new Set();
 const lastStreak = {};
 const giftBuffer = {};
@@ -116,7 +116,6 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
-      // 🧠 STREAK GIFTS FIX
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
 
@@ -143,7 +142,7 @@ app.post('/connect', async (req, res) => {
       }
 
       addToBuffer(
-        username, // 🔥 OWNER (IMPORTANT)
+        username,
         user,
         rawUser,
         value,
@@ -188,8 +187,10 @@ app.post('/connect', async (req, res) => {
 });
 
 // =========================
-// 🚀 START SERVER
+// 🚀 START SERVER (RAILWAY FIX)
 // =========================
-app.listen(3000, () => {
-  console.log("🌐 Server running on http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
 });
