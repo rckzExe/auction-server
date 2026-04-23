@@ -6,12 +6,30 @@ const app = express();
 app.use(express.json());
 
 // =========================
-// 🔥 FIREBASE (FINAL FIX)
+// 🔥 FIREBASE (FULL FIX)
 // =========================
-const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+const raw = process.env.FIREBASE_KEY;
 
-// 🔥 THIS LINE FIXES YOUR ERROR
-serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+if (!raw) {
+  throw new Error("FIREBASE_KEY is missing");
+}
+
+let serviceAccount;
+
+try {
+  serviceAccount = JSON.parse(raw);
+} catch (e) {
+  console.error("❌ Failed to parse FIREBASE_KEY JSON");
+  throw e;
+}
+
+// 🔥 FIX PRIVATE KEY FORMATTING (CRITICAL)
+if (serviceAccount.private_key) {
+  serviceAccount.private_key = serviceAccount.private_key
+    .replace(/\\n/g, '\n')
+    .replace(/\r/g, '')
+    .trim();
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -105,6 +123,7 @@ app.post('/connect', async (req, res) => {
 
     console.log("✅ Connected:", username);
 
+    // 🎁 GIFT HANDLER
     connection.on('gift', async (data) => {
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
@@ -118,6 +137,7 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
+      // 🧠 STREAK FIX
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
 
@@ -152,6 +172,7 @@ app.post('/connect', async (req, res) => {
       );
     });
 
+    // 💬 CHAT → BID
     connection.on('chat', async (data) => {
 
       const msg = data.comment;
@@ -188,7 +209,7 @@ app.post('/connect', async (req, res) => {
 });
 
 // =========================
-// 🚀 START SERVER
+// 🚀 START SERVER (RAILWAY SAFE)
 // =========================
 const PORT = process.env.PORT || 3000;
 
