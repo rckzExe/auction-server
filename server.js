@@ -6,33 +6,14 @@ const app = express();
 app.use(express.json());
 
 // =========================
-// 🔥 FIREBASE (FULL FIX)
+// 🔥 FIREBASE (FINAL WORKING VERSION)
 // =========================
-const raw = process.env.FIREBASE_KEY;
-
-if (!raw) {
-  throw new Error("FIREBASE_KEY is missing");
-}
-
-let serviceAccount;
-
-try {
-  serviceAccount = JSON.parse(raw);
-} catch (e) {
-  console.error("❌ Failed to parse FIREBASE_KEY JSON");
-  throw e;
-}
-
-// 🔥 FIX PRIVATE KEY FORMATTING (CRITICAL)
-if (serviceAccount.private_key) {
-  serviceAccount.private_key = serviceAccount.private_key
-    .replace(/\\n/g, '\n')
-    .replace(/\r/g, '')
-    .trim();
-}
-
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  }),
   databaseURL: "https://auction-app-4e98f-default-rtdb.firebaseio.com"
 });
 
@@ -137,7 +118,6 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
-      // 🧠 STREAK FIX
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
 
@@ -209,7 +189,7 @@ app.post('/connect', async (req, res) => {
 });
 
 // =========================
-// 🚀 START SERVER (RAILWAY SAFE)
+// 🚀 START SERVER
 // =========================
 const PORT = process.env.PORT || 3000;
 
