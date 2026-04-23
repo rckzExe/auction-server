@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 
 // =========================
-// 🔥 FIREBASE (FINAL WORKING VERSION)
+// 🔥 FIREBASE
 // =========================
 admin.initializeApp({
   credential: admin.credential.cert({
@@ -28,6 +28,13 @@ const lastStreak = {};
 const giftBuffer = {};
 
 const FLUSH_DELAY = 250;
+
+// =========================
+// 🔧 SAFE KEY FUNCTION
+// =========================
+function safeKey(str) {
+  return str.replace(/[.#$[\]]/g, "_");
+}
 
 // =========================
 // 🧠 BUFFER SYSTEM
@@ -54,7 +61,6 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
     delete giftBuffer[key];
 
     try {
-      // ✅ FIXED PATH
       const ref = db.ref(`auctions/${owner}/players/${user}`);
 
       await ref.transaction(current => {
@@ -85,33 +91,38 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 // 🔌 CONNECT ENDPOINT
 // =========================
 app.post('/connect', async (req, res) => {
-  const username = req.body.username;
 
-  console.log("📥 /connect hit with:", username);
+  const rawUsername = req.body.username;
 
-  if (!username) {
+  console.log("📥 /connect hit with:", rawUsername);
+
+  if (!rawUsername) {
     return res.status(400).send("Missing username");
   }
 
-  if (connections[username]) {
-    console.log("⚠️ Already connected:", username);
+  // 🔥 IMPORTANT
+  const safeUsername = safeKey(rawUsername);
+
+  if (connections[safeUsername]) {
+    console.log("⚠️ Already connected:", rawUsername);
     return res.send("Already connected");
   }
 
-  console.log("🚀 Connecting:", username);
+  console.log("🚀 Connecting:", rawUsername);
 
-  const connection = new WebcastPushConnection(username);
-  connections[username] = connection;
+  // ✅ TikTok uses RAW username
+  const connection = new WebcastPushConnection(rawUsername);
+
+  // ✅ Store by SAFE key
+  connections[safeUsername] = connection;
 
   try {
     await connection.connect();
 
-    console.log("✅ Connected:", username);
+    console.log("✅ Connected:", rawUsername);
 
     // 🎁 GIFT HANDLER
     connection.on('gift', async (data) => {
-
-      console.log("🎁 RAW GIFT:", data.uniqueId, data.giftId, data.repeatCount);
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
       if (processed.has(id)) return;
@@ -120,7 +131,7 @@ app.post('/connect', async (req, res) => {
       setTimeout(() => processed.delete(id), 5000);
 
       const rawUser = data.uniqueId || "unknown";
-      const user = rawUser.replace(/[.#$[\]]/g, "_");
+      const user = safeKey(rawUser);
 
       let value = 0;
 
@@ -149,10 +160,8 @@ app.post('/connect', async (req, res) => {
         }
       }
 
-      console.log("🎁 PROCESSED:", rawUser, "+", value);
-
       addToBuffer(
-        username,
+        safeUsername, // 🔥 SAFE
         user,
         rawUser,
         value,
@@ -163,18 +172,15 @@ app.post('/connect', async (req, res) => {
     // 💬 CHAT → BID
     connection.on('chat', async (data) => {
 
-      console.log("💬 RAW CHAT:", data.uniqueId, data.comment);
-
       const msg = data.comment;
       const rawUser = data.uniqueId || "unknown";
-      const user = rawUser.replace(/[.#$[\]]/g, "_");
+      const user = safeKey(rawUser);
 
       const num = parseInt(msg);
       if (isNaN(num)) return;
 
       try {
-        // ✅ FIXED PATH
-        await db.ref(`auctions/${username}/players/${user}`).update({
+        await db.ref(`auctions/${safeUsername}/players/${user}`).update({
           name: rawUser,
           score: num,
           photoUrl:
@@ -183,7 +189,7 @@ app.post('/connect', async (req, res) => {
             null
         });
 
-        console.log(`💬 BID: [${username}] ${rawUser} → ${num}`);
+        console.log(`💬 BID: [${rawUsername}] ${rawUser} → ${num}`);
 
       } catch (err) {
         console.error("❌ Chat error:", err);
@@ -194,7 +200,7 @@ app.post('/connect', async (req, res) => {
 
   } catch (err) {
     console.error("❌ Failed:", err.message);
-    delete connections[username];
+    delete connections[safeUsername];
     res.status(500).send("Failed to connect");
   }
 });
