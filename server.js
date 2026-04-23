@@ -100,7 +100,6 @@ app.post('/connect', async (req, res) => {
     return res.status(400).send("Missing username");
   }
 
-  // 🔥 IMPORTANT
   const safeUsername = safeKey(rawUsername);
 
   if (connections[safeUsername]) {
@@ -110,10 +109,7 @@ app.post('/connect', async (req, res) => {
 
   console.log("🚀 Connecting:", rawUsername);
 
-  // ✅ TikTok uses RAW username
   const connection = new WebcastPushConnection(rawUsername);
-
-  // ✅ Store by SAFE key
   connections[safeUsername] = connection;
 
   try {
@@ -121,7 +117,9 @@ app.post('/connect', async (req, res) => {
 
     console.log("✅ Connected:", rawUsername);
 
+    // =========================
     // 🎁 GIFT HANDLER
+    // =========================
     connection.on('gift', async (data) => {
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
@@ -132,6 +130,15 @@ app.post('/connect', async (req, res) => {
 
       const rawUser = data.uniqueId || "unknown";
       const user = safeKey(rawUser);
+
+      // 🔥 STOP IF AUCTION NOT ACTIVE OR FINISHED
+      const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+      const auction = snap.val();
+
+      if (!auction || !auction.active) return;
+
+      // stop AFTER snipe ends
+      if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
       let value = 0;
 
@@ -161,7 +168,7 @@ app.post('/connect', async (req, res) => {
       }
 
       addToBuffer(
-        safeUsername, // 🔥 SAFE
+        safeUsername,
         user,
         rawUser,
         value,
@@ -169,15 +176,24 @@ app.post('/connect', async (req, res) => {
       );
     });
 
+    // =========================
     // 💬 CHAT → BID
+    // =========================
     connection.on('chat', async (data) => {
 
-      const msg = data.comment;
       const rawUser = data.uniqueId || "unknown";
       const user = safeKey(rawUser);
+      const msg = data.comment;
 
       const num = parseInt(msg);
       if (isNaN(num)) return;
+
+      // 🔥 STOP IF AUCTION NOT ACTIVE OR FINISHED
+      const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+      const auction = snap.val();
+
+      if (!auction || !auction.active) return;
+      if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
       try {
         await db.ref(`auctions/${safeUsername}/players/${user}`).update({
