@@ -86,11 +86,14 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 app.post('/connect', async (req, res) => {
   const username = req.body.username;
 
+  console.log("📥 /connect hit with:", username); // 🔥 NEW LOG
+
   if (!username) {
     return res.status(400).send("Missing username");
   }
 
   if (connections[username]) {
+    console.log("⚠️ Already connected:", username); // 🔥 NEW LOG
     return res.send("Already connected");
   }
 
@@ -106,6 +109,8 @@ app.post('/connect', async (req, res) => {
 
     // 🎁 GIFT HANDLER
     connection.on('gift', async (data) => {
+
+      console.log("🎁 RAW GIFT:", data.uniqueId, data.giftId, data.repeatCount); // 🔥 NEW LOG
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
       if (processed.has(id)) return;
@@ -143,6 +148,8 @@ app.post('/connect', async (req, res) => {
         }
       }
 
+      console.log("🎁 PROCESSED:", rawUser, "+", value); // 🔥 NEW LOG
+
       addToBuffer(
         username,
         user,
@@ -154,6 +161,8 @@ app.post('/connect', async (req, res) => {
 
     // 💬 CHAT → BID
     connection.on('chat', async (data) => {
+
+      console.log("💬 RAW CHAT:", data.uniqueId, data.comment); // 🔥 NEW LOG
 
       const msg = data.comment;
       const rawUser = data.uniqueId || "unknown";
@@ -172,7 +181,7 @@ app.post('/connect', async (req, res) => {
             null
         });
 
-        console.log(`💬 [${username}] ${rawUser} bid ${num}`);
+        console.log(`💬 BID: [${username}] ${rawUser} → ${num}`); // 🔥 UPDATED LOG
 
       } catch (err) {
         console.error("❌ Chat error:", err);
