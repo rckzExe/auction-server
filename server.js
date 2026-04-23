@@ -54,7 +54,8 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
     delete giftBuffer[key];
 
     try {
-      const ref = db.ref(`auction/${owner}/players/${user}`);
+      // ✅ FIXED PATH
+      const ref = db.ref(`auctions/${owner}/players/${user}`);
 
       await ref.transaction(current => {
         if (!current) {
@@ -86,14 +87,14 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 app.post('/connect', async (req, res) => {
   const username = req.body.username;
 
-  console.log("📥 /connect hit with:", username); // 🔥 NEW LOG
+  console.log("📥 /connect hit with:", username);
 
   if (!username) {
     return res.status(400).send("Missing username");
   }
 
   if (connections[username]) {
-    console.log("⚠️ Already connected:", username); // 🔥 NEW LOG
+    console.log("⚠️ Already connected:", username);
     return res.send("Already connected");
   }
 
@@ -110,7 +111,7 @@ app.post('/connect', async (req, res) => {
     // 🎁 GIFT HANDLER
     connection.on('gift', async (data) => {
 
-      console.log("🎁 RAW GIFT:", data.uniqueId, data.giftId, data.repeatCount); // 🔥 NEW LOG
+      console.log("🎁 RAW GIFT:", data.uniqueId, data.giftId, data.repeatCount);
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
       if (processed.has(id)) return;
@@ -148,7 +149,7 @@ app.post('/connect', async (req, res) => {
         }
       }
 
-      console.log("🎁 PROCESSED:", rawUser, "+", value); // 🔥 NEW LOG
+      console.log("🎁 PROCESSED:", rawUser, "+", value);
 
       addToBuffer(
         username,
@@ -162,7 +163,7 @@ app.post('/connect', async (req, res) => {
     // 💬 CHAT → BID
     connection.on('chat', async (data) => {
 
-      console.log("💬 RAW CHAT:", data.uniqueId, data.comment); // 🔥 NEW LOG
+      console.log("💬 RAW CHAT:", data.uniqueId, data.comment);
 
       const msg = data.comment;
       const rawUser = data.uniqueId || "unknown";
@@ -172,7 +173,8 @@ app.post('/connect', async (req, res) => {
       if (isNaN(num)) return;
 
       try {
-        await db.ref(`auction/${username}/players/${user}`).update({
+        // ✅ FIXED PATH
+        await db.ref(`auctions/${username}/players/${user}`).update({
           name: rawUser,
           score: num,
           photoUrl:
@@ -181,7 +183,7 @@ app.post('/connect', async (req, res) => {
             null
         });
 
-        console.log(`💬 BID: [${username}] ${rawUser} → ${num}`); // 🔥 UPDATED LOG
+        console.log(`💬 BID: [${username}] ${rawUser} → ${num}`);
 
       } catch (err) {
         console.error("❌ Chat error:", err);
