@@ -6,9 +6,12 @@ const app = express();
 app.use(express.json());
 
 // =========================
-// 🔥 FIREBASE (RAILWAY FIX)
+// 🔥 FIREBASE (FINAL FIX)
 // =========================
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+
+// 🔥 THIS LINE FIXES YOUR ERROR
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -102,7 +105,6 @@ app.post('/connect', async (req, res) => {
 
     console.log("✅ Connected:", username);
 
-    // 🎁 GIFT HANDLER
     connection.on('gift', async (data) => {
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
@@ -150,7 +152,6 @@ app.post('/connect', async (req, res) => {
       );
     });
 
-    // 💬 CHAT → BID
     connection.on('chat', async (data) => {
 
       const msg = data.comment;
@@ -187,7 +188,7 @@ app.post('/connect', async (req, res) => {
 });
 
 // =========================
-// 🚀 START SERVER (RAILWAY FIX)
+// 🚀 START SERVER
 // =========================
 const PORT = process.env.PORT || 3000;
 
