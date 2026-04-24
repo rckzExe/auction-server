@@ -142,20 +142,34 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
+      // =========================
+      // ✅ FIXED VALUE LOGIC
+      // =========================
+      const repeat = data.repeatCount || 1;
+
+      const giftValues = {
+        5655: 5,    // finger heart
+        5760: 30,   // donut
+        7934: 100,  // hand heart
+      };
+
+      const baseValue =
+        giftValues[data.giftId] ||
+        (data.diamondCount && data.diamondCount > 1 ? data.diamondCount : 1);
+
+      value = baseValue * repeat;
+
+      // =========================
+      // (kept your anti-spam logic)
+      // =========================
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
-
-        value = data.repeatCount || 1;
 
         lastStreak[user] = {
           time: Date.now(),
           amount: value
         };
-
       } else {
-
-        value = data.diamondCount || data.repeatCount || 1;
-
         const last = lastStreak[user];
 
         if (
