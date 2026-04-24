@@ -140,7 +140,7 @@ app.post('/connect', async (req, res) => {
       let value = 0;
 
       // =========================
-      // ✅ FINAL FIXED VALUE LOGIC
+      // ✅ STRICT FIX (ONLY CHANGE)
       // =========================
       const repeat = data.repeatCount || 1;
 
@@ -150,14 +150,12 @@ app.post('/connect', async (req, res) => {
         7934: 100,  // hand heart
       };
 
-      let baseValue = 0;
+      let baseValue;
 
-      if (giftValues[data.giftId]) {
+      if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
         baseValue = giftValues[data.giftId];
-      } else if (data.diamondCount && data.diamondCount > 0) {
-        baseValue = data.diamondCount;
       } else {
-        baseValue = 1;
+        baseValue = data.diamondCount || 1;
       }
 
       value = baseValue * repeat;
