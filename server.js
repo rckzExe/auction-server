@@ -137,16 +137,15 @@ app.post('/connect', async (req, res) => {
       let value = 0;
 
       // =========================
-      // ✅ FINAL FIX (ROSE SAFE)
+      // ✅ FINAL FIX
       // =========================
       const giftName = data.giftName || "";
+      const repeat = data.repeatCount || 1;
 
-      // FORCE ROSE = 1 ALWAYS
       if (giftName.toLowerCase().includes("rose")) {
-        value = 1;
+        // FIX: allow streaks properly
+        value = repeat;
       } else {
-
-        const repeat = data.repeatCount || 1;
 
         const giftValues = {
           5655: 5,    // finger heart
@@ -166,26 +165,9 @@ app.post('/connect', async (req, res) => {
       }
 
       // =========================
-      // original anti-spam logic
+      // 🔥 REMOVED WAIT FOR STREAK END
       // =========================
-      if (data.giftType === 1) {
-        if (!data.repeatEnd) return;
-
-        lastStreak[user] = {
-          time: Date.now(),
-          amount: value
-        };
-      } else {
-        const last = lastStreak[user];
-
-        if (
-          last &&
-          value === 1 &&
-          (Date.now() - last.time < 1200)
-        ) {
-          return;
-        }
-      }
+      // (no more repeatEnd check)
 
       addToBuffer(
         safeUsername,
