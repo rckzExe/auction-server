@@ -139,15 +139,11 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
-      // =========================
-      // ✅ TARGETED FIX ONLY
-      // =========================
       const giftName = (data.giftName || "").toLowerCase();
       const repeat = data.repeatCount || 1;
 
-      // FIX BROKEN GIFTS ONLY
       if (giftName.includes("rose") || giftName.includes("heart me")) {
-        value = repeat; // always correct (1 per send, streak works)
+        value = repeat;
       } else {
 
         const giftValues = {
@@ -167,9 +163,6 @@ app.post('/connect', async (req, res) => {
         value = baseValue * repeat;
       }
 
-      // =========================
-      // original anti-spam logic (UNCHANGED)
-      // =========================
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
 
@@ -198,40 +191,7 @@ app.post('/connect', async (req, res) => {
       );
     });
 
-    // =========================
-    // 💬 CHAT → BID
-    // =========================
-    connection.on('chat', async (data) => {
-
-      const rawUser = data.uniqueId || "unknown";
-      const user = safeKey(rawUser);
-      const msg = data.comment;
-
-      const num = parseInt(msg);
-      if (isNaN(num)) return;
-
-      const snap = await db.ref(`auctions/${safeUsername}`).once("value");
-      const auction = snap.val();
-
-      if (!auction || !auction.active) return;
-      if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
-
-      try {
-        await db.ref(`auctions/${safeUsername}/players/${user}`).update({
-          name: rawUser,
-          score: num,
-          photoUrl:
-            data.profilePictureUrl ||
-            data.user?.profilePictureUrl ||
-            null
-        });
-
-        console.log(`💬 BID: [${rawUsername}] ${rawUser} → ${num}`);
-
-      } catch (err) {
-        console.error("❌ Chat error:", err);
-      }
-    });
+    // ❌ CHAT HANDLER REMOVED (THIS WAS BREAKING YOUR AUCTION)
 
     res.send("Connected");
 
