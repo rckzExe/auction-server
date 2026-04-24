@@ -117,6 +117,9 @@ app.post('/connect', async (req, res) => {
 
     console.log("✅ Connected:", rawUsername);
 
+    // =========================
+    // 🎁 GIFT HANDLER
+    // =========================
     connection.on('gift', async (data) => {
 
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
@@ -137,37 +140,42 @@ app.post('/connect', async (req, res) => {
       let value = 0;
 
       // =========================
-      // ✅ FINAL FIX
+      // ✅ FIXED LOGIC (NO DUPES + LIVE STREAKS)
       // =========================
       const giftName = data.giftName || "";
       const repeat = data.repeatCount || 1;
 
+      const streakKey = `${user}_${data.giftId}`;
+
+      if (!lastStreak[streakKey]) {
+        lastStreak[streakKey] = 0;
+      }
+
+      let diff = repeat - lastStreak[streakKey];
+      if (diff <= 0) return;
+
+      lastStreak[streakKey] = repeat;
+
+      let baseValue;
+
+      // Rose fix
       if (giftName.toLowerCase().includes("rose")) {
-        // FIX: allow streaks properly
-        value = repeat;
+        baseValue = 1;
       } else {
-
         const giftValues = {
-          5655: 5,    // finger heart
-          5760: 30,   // donut
-          7934: 100,  // hand heart
+          5655: 5,
+          5760: 30,
+          7934: 100,
         };
-
-        let baseValue;
 
         if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
           baseValue = giftValues[data.giftId];
         } else {
           baseValue = data.diamondCount || 1;
         }
-
-        value = baseValue * repeat;
       }
 
-      // =========================
-      // 🔥 REMOVED WAIT FOR STREAK END
-      // =========================
-      // (no more repeatEnd check)
+      value = baseValue * diff;
 
       addToBuffer(
         safeUsername,
@@ -178,6 +186,9 @@ app.post('/connect', async (req, res) => {
       );
     });
 
+    // =========================
+    // 💬 CHAT → BID
+    // =========================
     connection.on('chat', async (data) => {
 
       const rawUser = data.uniqueId || "unknown";
@@ -219,6 +230,9 @@ app.post('/connect', async (req, res) => {
   }
 });
 
+// =========================
+// 🚀 START SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
