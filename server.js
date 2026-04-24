@@ -140,42 +140,54 @@ app.post('/connect', async (req, res) => {
       let value = 0;
 
       // =========================
-      // ✅ FIXED LOGIC (NO DUPES + LIVE STREAKS)
+      // ✅ TARGETED FIX ONLY
       // =========================
-      const giftName = data.giftName || "";
+      const giftName = (data.giftName || "").toLowerCase();
       const repeat = data.repeatCount || 1;
 
-      const streakKey = `${user}_${data.giftId}`;
-
-      if (!lastStreak[streakKey]) {
-        lastStreak[streakKey] = 0;
-      }
-
-      let diff = repeat - lastStreak[streakKey];
-      if (diff <= 0) return;
-
-      lastStreak[streakKey] = repeat;
-
-      let baseValue;
-
-      // Rose fix
-      if (giftName.toLowerCase().includes("rose")) {
-        baseValue = 1;
+      // FIX BROKEN GIFTS ONLY
+      if (giftName.includes("rose") || giftName.includes("heart me")) {
+        value = repeat; // always correct (1 per send, streak works)
       } else {
+
         const giftValues = {
           5655: 5,
           5760: 30,
           7934: 100,
         };
 
+        let baseValue;
+
         if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
           baseValue = giftValues[data.giftId];
         } else {
           baseValue = data.diamondCount || 1;
         }
+
+        value = baseValue * repeat;
       }
 
-      value = baseValue * diff;
+      // =========================
+      // original anti-spam logic (UNCHANGED)
+      // =========================
+      if (data.giftType === 1) {
+        if (!data.repeatEnd) return;
+
+        lastStreak[user] = {
+          time: Date.now(),
+          amount: value
+        };
+      } else {
+        const last = lastStreak[user];
+
+        if (
+          last &&
+          value === 1 &&
+          (Date.now() - last.time < 1200)
+        ) {
+          return;
+        }
+      }
 
       addToBuffer(
         safeUsername,
@@ -230,9 +242,6 @@ app.post('/connect', async (req, res) => {
   }
 });
 
-// =========================
-// 🚀 START SERVER
-// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
