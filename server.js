@@ -131,19 +131,16 @@ app.post('/connect', async (req, res) => {
       const rawUser = data.uniqueId || "unknown";
       const user = safeKey(rawUser);
 
-      // 🔥 STOP IF AUCTION NOT ACTIVE OR FINISHED
       const snap = await db.ref(`auctions/${safeUsername}`).once("value");
       const auction = snap.val();
 
       if (!auction || !auction.active) return;
-
-      // stop AFTER snipe ends
       if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
       let value = 0;
 
       // =========================
-      // ✅ FIXED VALUE LOGIC
+      // ✅ FINAL FIXED VALUE LOGIC
       // =========================
       const repeat = data.repeatCount || 1;
 
@@ -153,14 +150,20 @@ app.post('/connect', async (req, res) => {
         7934: 100,  // hand heart
       };
 
-      const baseValue =
-        giftValues[data.giftId] ||
-        (data.diamondCount && data.diamondCount > 1 ? data.diamondCount : 1);
+      let baseValue = 0;
+
+      if (giftValues[data.giftId]) {
+        baseValue = giftValues[data.giftId];
+      } else if (data.diamondCount && data.diamondCount > 0) {
+        baseValue = data.diamondCount;
+      } else {
+        baseValue = 1;
+      }
 
       value = baseValue * repeat;
 
       // =========================
-      // (kept your anti-spam logic)
+      // (original anti-spam logic untouched)
       // =========================
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
@@ -202,7 +205,6 @@ app.post('/connect', async (req, res) => {
       const num = parseInt(msg);
       if (isNaN(num)) return;
 
-      // 🔥 STOP IF AUCTION NOT ACTIVE OR FINISHED
       const snap = await db.ref(`auctions/${safeUsername}`).once("value");
       const auction = snap.val();
 
