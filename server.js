@@ -88,6 +88,18 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 }
 
 // =========================
+// 🔌 SAFE CONNECT FUNCTION
+// =========================
+async function safeConnect(connection) {
+  return Promise.race([
+    connection.connect(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Connection timeout")), 10000)
+    )
+  ]);
+}
+
+// =========================
 // 🔌 CONNECT ENDPOINT
 // =========================
 app.post('/connect', async (req, res) => {
@@ -102,16 +114,9 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
-  // ✅ FIX: allow reconnect instead of blocking
+  // ✅ FIX: DO NOT DISCONNECT (prevents freeze)
   if (connections[safeUsername]) {
-    console.log("♻️ Reconnecting:", rawUsername);
-
-    try {
-      connections[safeUsername].disconnect();
-    } catch (e) {
-      console.log("Disconnect error (safe to ignore)");
-    }
-
+    console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
   }
 
@@ -121,7 +126,8 @@ app.post('/connect', async (req, res) => {
   connections[safeUsername] = connection;
 
   try {
-    await connection.connect();
+    // ✅ SAFE CONNECT (no hanging forever)
+    await safeConnect(connection);
 
     console.log("✅ Connected:", rawUsername);
 
@@ -227,7 +233,6 @@ app.post('/connect', async (req, res) => {
 
         if (!top) return;
 
-        // only winner can vouch
         if (safeKey(top.name) !== user) return;
 
         await db.ref(`auctions/${safeUsername}/vouches`).transaction(v => (v || 0) + 1);
