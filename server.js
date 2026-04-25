@@ -24,9 +24,10 @@ const db = admin.database();
 // =========================
 const connections = {};
 const processed = new Set();
-const processedChats = new Set(); // ✅ FIX (dedupe vouches)
+const processedChats = new Set(); // ✅ dedupe chat
 const lastStreak = {};
 const giftBuffer = {};
+const vouchCooldown = {}; // ✅ anti-spam
 
 const FLUSH_DELAY = 250;
 
@@ -115,7 +116,7 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
-  // ✅ KEEP YOUR CURRENT SAFE RECONNECT LOGIC
+  // ✅ keep your reconnect logic
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
@@ -206,14 +207,13 @@ app.post('/connect', async (req, res) => {
     });
 
     // =========================
-    // ⭐ VOUCH SYSTEM (FIXED)
+    // ⭐ VOUCH SYSTEM (FINAL)
     // =========================
     connection.on('chat', async (data) => {
 
       const message = (data.comment || "").toLowerCase().trim();
       if (message !== "vouch") return;
 
-      // ✅ FIX DUPLICATES
       const id = data.msgId || `${data.userId}-${data.timestamp}`;
       if (processedChats.has(id)) return;
 
@@ -223,8 +223,7 @@ app.post('/connect', async (req, res) => {
       const user = safeKey(data.uniqueId || "");
 
       try {
-        const auctionRef = db.ref(`auctions/${safeUsername}`);
-        const snap = await auctionRef.once("value");
+        const snap = await db.ref(`auctions/${safeUsername}`).once("value");
         const auction = snap.val();
 
         if (!auction || !auction.active) return;
@@ -240,12 +239,23 @@ app.post('/connect', async (req, res) => {
 
         if (!top) return;
 
-        // only winner can vouch
         if (safeKey(top.name) !== user) return;
 
-        // ✅ BETTERTOK STYLE (PERSISTENT)
+        // ✅ anti-spam (1 per auction)
+        const key = `${safeUsername}_${user}`;
+        if (vouchCooldown[key]) return;
+
+        vouchCooldown[key] = true;
+
+        // ✅ persistent vouches
         await db.ref(`users/${safeUsername}/vouches`)
           .transaction(v => (v || 0) + 1);
+
+        // ✅ trigger popup animation
+        await db.ref(`auctions/${safeUsername}/lastVouch`).set({
+          name: top.name,
+          time: Date.now()
+        });
 
         console.log(`⭐ VOUCH from ${top.name}`);
 
