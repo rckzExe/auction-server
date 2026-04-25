@@ -24,6 +24,7 @@ const db = admin.database();
 // =========================
 const connections = {};
 const processed = new Set();
+const processedChats = new Set(); // ✅ FIX (dedupe vouches)
 const lastStreak = {};
 const giftBuffer = {};
 
@@ -114,7 +115,7 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
-  // ✅ FIX: DO NOT DISCONNECT (prevents freeze)
+  // ✅ KEEP YOUR CURRENT SAFE RECONNECT LOGIC
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
@@ -126,7 +127,6 @@ app.post('/connect', async (req, res) => {
   connections[safeUsername] = connection;
 
   try {
-    // ✅ SAFE CONNECT (no hanging forever)
     await safeConnect(connection);
 
     console.log("✅ Connected:", rawUsername);
@@ -206,12 +206,19 @@ app.post('/connect', async (req, res) => {
     });
 
     // =========================
-    // ⭐ VOUCH SYSTEM
+    // ⭐ VOUCH SYSTEM (FIXED)
     // =========================
     connection.on('chat', async (data) => {
 
       const message = (data.comment || "").toLowerCase().trim();
       if (message !== "vouch") return;
+
+      // ✅ FIX DUPLICATES
+      const id = data.msgId || `${data.userId}-${data.timestamp}`;
+      if (processedChats.has(id)) return;
+
+      processedChats.add(id);
+      setTimeout(() => processedChats.delete(id), 5000);
 
       const user = safeKey(data.uniqueId || "");
 
@@ -233,9 +240,12 @@ app.post('/connect', async (req, res) => {
 
         if (!top) return;
 
+        // only winner can vouch
         if (safeKey(top.name) !== user) return;
 
-        await db.ref(`auctions/${safeUsername}/vouches`).transaction(v => (v || 0) + 1);
+        // ✅ BETTERTOK STYLE (PERSISTENT)
+        await db.ref(`users/${safeUsername}/vouches`)
+          .transaction(v => (v || 0) + 1);
 
         console.log(`⭐ VOUCH from ${top.name}`);
 
