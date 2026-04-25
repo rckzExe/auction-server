@@ -102,9 +102,17 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
+  // ✅ FIX: allow reconnect instead of blocking
   if (connections[safeUsername]) {
-    console.log("⚠️ Already connected:", rawUsername);
-    return res.send("Already connected");
+    console.log("♻️ Reconnecting:", rawUsername);
+
+    try {
+      connections[safeUsername].disconnect();
+    } catch (e) {
+      console.log("Disconnect error (safe to ignore)");
+    }
+
+    delete connections[safeUsername];
   }
 
   console.log("🚀 Connecting:", rawUsername);
@@ -191,7 +199,45 @@ app.post('/connect', async (req, res) => {
       );
     });
 
-    // ❌ CHAT HANDLER REMOVED (THIS WAS BREAKING YOUR AUCTION)
+    // =========================
+    // ⭐ VOUCH SYSTEM
+    // =========================
+    connection.on('chat', async (data) => {
+
+      const message = (data.comment || "").toLowerCase().trim();
+      if (message !== "vouch") return;
+
+      const user = safeKey(data.uniqueId || "");
+
+      try {
+        const auctionRef = db.ref(`auctions/${safeUsername}`);
+        const snap = await auctionRef.once("value");
+        const auction = snap.val();
+
+        if (!auction || !auction.active) return;
+
+        const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
+        const players = playersSnap.val() || {};
+
+        let top = null;
+
+        Object.values(players).forEach(p => {
+          if (!top || p.score > top.score) top = p;
+        });
+
+        if (!top) return;
+
+        // only winner can vouch
+        if (safeKey(top.name) !== user) return;
+
+        await db.ref(`auctions/${safeUsername}/vouches`).transaction(v => (v || 0) + 1);
+
+        console.log(`⭐ VOUCH from ${top.name}`);
+
+      } catch (err) {
+        console.error("Vouch error:", err);
+      }
+    });
 
     res.send("Connected");
 
