@@ -24,10 +24,10 @@ const db = admin.database();
 // =========================
 const connections = {};
 const processed = new Set();
-const processedChats = new Set(); // ✅ dedupe chat
+const processedChats = new Set();
 const lastStreak = {};
 const giftBuffer = {};
-const vouchCooldown = {}; // ✅ anti-spam
+const vouchCooldown = {};
 
 const FLUSH_DELAY = 250;
 
@@ -116,7 +116,6 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
-  // ✅ keep your reconnect logic
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
@@ -207,7 +206,7 @@ app.post('/connect', async (req, res) => {
     });
 
     // =========================
-    // ⭐ VOUCH SYSTEM (FINAL)
+    // ⭐ VOUCH SYSTEM (FIXED)
     // =========================
     connection.on('chat', async (data) => {
 
@@ -239,19 +238,19 @@ app.post('/connect', async (req, res) => {
 
         if (!top) return;
 
-        if (safeKey(top.name) !== user) return;
+        // ✅ FIXED comparison (case safe)
+        if (safeKey(top.name).toLowerCase() !== user.toLowerCase()) return;
 
-        // ✅ anti-spam (1 per auction)
         const key = `${safeUsername}_${user}`;
         if (vouchCooldown[key]) return;
 
+        // ✅ FIXED cooldown (not permanent)
         vouchCooldown[key] = true;
+        setTimeout(() => delete vouchCooldown[key], 10000);
 
-        // ✅ persistent vouches
         await db.ref(`users/${safeUsername}/vouches`)
           .transaction(v => (v || 0) + 1);
 
-        // ✅ trigger popup animation
         await db.ref(`auctions/${safeUsername}/lastVouch`).set({
           name: top.name,
           time: Date.now()
