@@ -26,8 +26,10 @@ const connections = {};
 const processed = new Set();
 const processedChats = new Set();
 const lastStreak = {};
+const giftBuffer = {};
 const vouchCooldown = {};
 
+const FLUSH_DELAY = 0;
 
 // =========================
 // 🔧 SAFE KEY FUNCTION
@@ -36,6 +38,56 @@ function safeKey(str) {
   return str.replace(/[.#$[\]]/g, "_");
 }
 
+// =========================
+// 🧠 BUFFER SYSTEM
+// =========================
+function addToBuffer(owner, user, rawUser, amount, photo) {
+
+  const key = `${owner}_${user}`;
+
+  if (!giftBuffer[key]) {
+    giftBuffer[key] = {
+      name: rawUser,
+      score: 0,
+      photoUrl: photo || "",
+      timeout: null
+    };
+  }
+
+  giftBuffer[key].score += amount;
+
+  clearTimeout(giftBuffer[key].timeout);
+
+  giftBuffer[key].timeout = setTimeout(async () => {
+    const data = giftBuffer[key];
+    delete giftBuffer[key];
+
+    try {
+      const ref = db.ref(`auctions/${owner}/players/${user}`);
+
+      await ref.transaction(current => {
+        if (!current) {
+          return {
+            name: data.name,
+            score: data.score,
+            photoUrl: data.photoUrl
+          };
+        }
+
+        return {
+          ...current,
+          score: (current.score || 0) + data.score
+        };
+      });
+
+      console.log(`✅ [${owner}] ${data.name} +${data.score}`);
+
+    } catch (err) {
+      console.error("❌ Firebase error:", err);
+    }
+
+  }, FLUSH_DELAY);
+}
 
 // =========================
 // 🔌 SAFE CONNECT FUNCTION
@@ -126,38 +178,31 @@ app.post('/connect', async (req, res) => {
       }
 
       if (data.giftType === 1) {
-  lastStreak[user] = {
-    time: Date.now(),
-    amount: value
-  };
-} else {
-  const last = lastStreak[user];
+        if (!data.repeatEnd) return;
 
-  if (
-    last &&
-    value === 1 &&
-    (Date.now() - last.time < 1200)
-  ) {
-    return;
-  }
-}
+        lastStreak[user] = {
+          time: Date.now(),
+          amount: value
+        };
+      } else {
+        const last = lastStreak[user];
 
-     const ref = db.ref(`auctions/${safeUsername}/players/${user}`);
+        if (
+          last &&
+          value === 1 &&
+          (Date.now() - last.time < 1200)
+        ) {
+          return;
+        }
+      }
 
-await ref.transaction(current => {
-  if (!current) {
-    return {
-      name: rawUser,
-      score: value,
-      photoUrl: data.profilePictureUrl || data.user?.profilePictureUrl || ""
-    };
-  }
-
-  return {
-    ...current,
-    score: (current.score || 0) + value
-  };
-});
+      addToBuffer(
+        safeUsername,
+        user,
+        rawUser,
+        value,
+        data.profilePictureUrl || data.user?.profilePictureUrl
+      );
     });
 
     // =========================
