@@ -30,7 +30,7 @@ const giftBuffer = {};
 const vouchCooldown = {};
 const auctionCache = {};
 
-const FLUSH_DELAY = 0;
+const FLUSH_DELAY = 300;
 
 // =========================
 // 🔧 SAFE KEY FUNCTION
