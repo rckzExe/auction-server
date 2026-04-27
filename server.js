@@ -29,7 +29,7 @@ const lastStreak = {};
 const giftBuffer = {};
 const vouchCooldown = {};
 
-const FLUSH_DELAY = 100;
+const FLUSH_DELAY = 250;
 
 // =========================
 // 🔧 SAFE KEY FUNCTION
