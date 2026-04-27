@@ -28,9 +28,8 @@ const processedChats = new Set();
 const lastStreak = {};
 const giftBuffer = {};
 const vouchCooldown = {};
-const auctionCache = {};
 
-const FLUSH_DELAY = 300;
+const FLUSH_DELAY = 100;
 
 // =========================
 // 🔧 SAFE KEY FUNCTION
@@ -129,13 +128,8 @@ app.post('/connect', async (req, res) => {
 
   try {
     await safeConnect(connection);
-    
 
     console.log("✅ Connected:", rawUsername);
-
-    db.ref(`auctions/${safeUsername}`).on("value", snap => {
-  auctionCache[safeUsername] = snap.val();
-});
 
     // =========================
     // 🎁 GIFT HANDLER
@@ -151,7 +145,8 @@ app.post('/connect', async (req, res) => {
       const rawUser = data.uniqueId || "unknown";
       const user = safeKey(rawUser);
 
-      const auction = auctionCache[safeUsername];
+      const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+      const auction = snap.val();
 
       if (!auction || !auction.active) return;
       if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
@@ -183,21 +178,23 @@ app.post('/connect', async (req, res) => {
       }
 
       if (data.giftType === 1) {
-  lastStreak[user] = {
-    time: Date.now(),
-    amount: value
-  };
-} else {
-  const last = lastStreak[user];
+        if (!data.repeatEnd) return;
 
-  if (
-    last &&
-    value === 1 &&
-    (Date.now() - last.time < 1200)
-  ) {
-    return;
-  }
-}
+        lastStreak[user] = {
+          time: Date.now(),
+          amount: value
+        };
+      } else {
+        const last = lastStreak[user];
+
+        if (
+          last &&
+          value === 1 &&
+          (Date.now() - last.time < 1200)
+        ) {
+          return;
+        }
+      }
 
       addToBuffer(
         safeUsername,
