@@ -153,64 +153,49 @@ app.post('/connect', async (req, res) => {
 
       let value = 0;
 
-const giftName = (data.giftName || "").toLowerCase();
-const repeat = data.repeatCount || 1;
+      const giftName = (data.giftName || "").toLowerCase();
+      const repeat = data.repeatCount || 1;
 
-// =========================
-// 🎯 STREAK GIFTS (LIVE)
-// =========================
-if (data.giftType === 1) {
-  const last = lastStreak[user];
+      if (giftName.includes("rose") || giftName.includes("heart me")) {
+        value = repeat;
+      } else {
 
-  if (last && data.repeatCount <= last.repeatCount) {
-    return;
-  }
+        const giftValues = {
+          5655: 5,
+          5760: 30,
+          7934: 100,
+        };
 
-  const increment = last
-    ? data.repeatCount - last.repeatCount
-    : data.repeatCount;
+        let baseValue;
 
-  // 👇 determine value per gift
-  let baseValue = 1;
+        if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
+          baseValue = giftValues[data.giftId];
+        } else {
+          baseValue = data.diamondCount || 1;
+        }
 
-  if (!(giftName.includes("rose") || giftName.includes("heart me"))) {
-    const giftValues = {
-      5655: 5,
-      5760: 30,
-      7934: 100,
-    };
+        value = baseValue * repeat;
+      }
 
-    baseValue = giftValues[data.giftId] || data.diamondCount || 1;
-  }
+      if (data.giftType === 1) {
+        if (!data.repeatEnd) return;
 
-  value = increment * baseValue;
+        lastStreak[user] = {
+          time: Date.now(),
+          amount: value
+        };
+      } else {
+        const last = lastStreak[user];
 
-  lastStreak[user] = {
-    repeatCount: data.repeatCount,
-    time: Date.now()
-  };
-}
+        if (
+          last &&
+          value === 1 &&
+          (Date.now() - last.time < 1200)
+        ) {
+          return;
+        }
+      }
 
-// =========================
-// 🎁 NORMAL GIFTS
-// =========================
-else {
-  let baseValue = 1;
-
-  if (!(giftName.includes("rose") || giftName.includes("heart me"))) {
-    const giftValues = {
-      5655: 5,
-      5760: 30,
-      7934: 100,
-    };
-
-    baseValue = giftValues[data.giftId] || data.diamondCount || 1;
-  }
-
-  value = baseValue * repeat;
-}
-
-     
       addToBuffer(
         safeUsername,
         user,
