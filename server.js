@@ -210,58 +210,69 @@ app.post('/connect', async (req, res) => {
     // =========================
     connection.on('chat', async (data) => {
 
-      const message = (data.comment || "").toLowerCase().trim();
-      if (message !== "vouch") return;
+  const message = (data.comment || "").toLowerCase();
+  const id = data.msgId || `${data.userId}-${data.timestamp}`;
 
-      const id = data.msgId || `${data.userId}-${data.timestamp}`;
-      if (processedChats.has(id)) return;
+  if (processedChats.has(id)) return;
+  processedChats.add(id);
+  setTimeout(() => processedChats.delete(id), 5000);
 
-      processedChats.add(id);
-      setTimeout(() => processedChats.delete(id), 5000);
+  const rawUser = data.uniqueId || "";
+  const user = safeKey(rawUser);
 
-      const user = safeKey(data.uniqueId || "");
+  try {
+    const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+    const auction = snap.val();
 
-      try {
-        const snap = await db.ref(`auctions/${safeUsername}`).once("value");
-        const auction = snap.val();
+    if (!auction || !auction.active) return;
 
-        if (!auction || !auction.active) return;
+    const words = auction.vouchWords || [];
 
-        const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
-        const players = playersSnap.val() || {};
+    // 🔥 CHECK IF MESSAGE CONTAINS ANY WORD
+    const triggered = words.some(word =>
+  typeof word === "string" && message.includes(word.toLowerCase())
+);
 
-        let top = null;
+    if (!triggered) return;
 
-        Object.values(players).forEach(p => {
-          if (!top || p.score > top.score) top = p;
-        });
+    // 🏆 GET CURRENT LEADER
+    const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
+    const players = playersSnap.val() || {};
 
-        if (!top) return;
+    let top = null;
 
-        // ✅ FIXED comparison (case safe)
-        if (safeKey(top.name).toLowerCase() !== user.toLowerCase()) return;
-
-        const key = `${safeUsername}_${user}`;
-        if (vouchCooldown[key]) return;
-
-        // ✅ FIXED cooldown (not permanent)
-        vouchCooldown[key] = true;
-        setTimeout(() => delete vouchCooldown[key], 10000);
-
-        await db.ref(`users/${safeUsername}/vouches`)
-          .transaction(v => (v || 0) + 1);
-
-        await db.ref(`auctions/${safeUsername}/lastVouch`).set({
-          name: top.name,
-          time: Date.now()
-        });
-
-        console.log(`⭐ VOUCH from ${top.name}`);
-
-      } catch (err) {
-        console.error("Vouch error:", err);
-      }
+    Object.values(players).forEach(p => {
+      if (!top || p.score > top.score) top = p;
     });
+
+    if (!top) return;
+
+    // ✅ ONLY WINNER CAN TRIGGER
+    if (safeKey(top.name).toLowerCase() !== user.toLowerCase()) return;
+
+    // ⏱ COOLDOWN
+    const key = `${safeUsername}_${user}`;
+    if (vouchCooldown[key]) return;
+
+    vouchCooldown[key] = true;
+    setTimeout(() => delete vouchCooldown[key], 3000);
+
+    // ➕ ADD VOUCH
+    await db.ref(`users/${safeUsername}/vouches`)
+      .transaction(v => (v || 0) + 1);
+
+    // 💥 TRIGGER OVERLAY
+    await db.ref(`events/${safeUsername}/vouchPop`).set({
+      user: top.name,
+      time: Date.now()
+    });
+
+    console.log(`💬 WORD VOUCH from ${top.name}`);
+
+  } catch (err) {
+    console.error("Vouch error:", err);
+  }
+});
 
     res.send("Connected");
 
