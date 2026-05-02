@@ -259,9 +259,13 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
     vouchCooldown[key] = true;
     setTimeout(() => delete vouchCooldown[key], 3000);
 
+   if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
+
     // ➕ ADD VOUCH
     await db.ref(`users/${safeUsername}/vouches`)
       .transaction(v => (v || 0) + 1);
+
+   await db.ref(`auctions/${safeUsername}/vouchedUsers/${user}`).set(true);
 
     // 💥 TRIGGER OVERLAY
     await db.ref(`auctions/${safeUsername}/lastVouch`).set({
