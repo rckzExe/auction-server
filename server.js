@@ -248,7 +248,9 @@ app.post('/connect', async (req, res) => {
     if (!top) return;
 
     // ✅ ONLY WINNER CAN TRIGGER
-    if (safeKey(top.name).toLowerCase() !== user.toLowerCase()) return;
+   if (!top.name || !rawUser) return;
+
+if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
 
     // ⏱ COOLDOWN
     const key = `${safeUsername}_${user}`;
@@ -262,10 +264,10 @@ app.post('/connect', async (req, res) => {
       .transaction(v => (v || 0) + 1);
 
     // 💥 TRIGGER OVERLAY
-    await db.ref(`events/${safeUsername}/vouchPop`).set({
-      user: top.name,
-      time: Date.now()
-    });
+    await db.ref(`auctions/${safeUsername}/lastVouch`).set({
+  user: top.name,
+  time: Date.now()
+});
 
     console.log(`💬 WORD VOUCH from ${top.name}`);
 
