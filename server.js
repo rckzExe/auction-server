@@ -289,6 +289,26 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
   }
 });
 
+// =========================
+// 🚨 BYPASS ALERT ENDPOINT
+// =========================
+app.post('/bypass-alert', async (req, res) => {
+  const { username } = req.body;
+
+  if (!username) return res.status(400).send("Missing username");
+
+  const owner = safeKey(username);
+
+  try {
+    await db.ref(`auctions/${owner}/bypassAlert`).set(Date.now());
+    console.log(`🚨 [${owner}] Bypass alert triggered`);
+    res.send("Alert triggered");
+  } catch (err) {
+    console.error("❌ Bypass alert error:", err);
+    res.status(500).send("Failed to trigger alert");
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
