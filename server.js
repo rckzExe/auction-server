@@ -29,6 +29,9 @@ const lastStreak = {};
 const giftBuffer = {};
 const vouchCooldown = {};
 
+// Maps TikTok username → the panel owner (safeUsername) currently connected to it
+const liveOwners = {};
+
 const FLUSH_DELAY = 250;
 
 // =========================
@@ -116,9 +119,19 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
+  // 🔒 ONE USER PER LIVE: check if someone else is already connected to this live
+  const currentOwner = liveOwners[safeUsername];
+  if (currentOwner && currentOwner !== safeUsername) {
+    console.log(`🚫 ${rawUsername} is already taken by another user`);
+    return res.status(403).send("This TikTok live is already connected by another user.");
+  }
+
+  // If the same user is reconnecting, clean up their old connection first
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
+    try { connections[safeUsername].disconnect(); } catch (_) {}
     delete connections[safeUsername];
+    delete liveOwners[safeUsername];
   }
 
   console.log("🚀 Connecting:", rawUsername);
@@ -128,6 +141,22 @@ app.post('/connect', async (req, res) => {
 
   try {
     await safeConnect(connection);
+
+    // 🔒 Register this live as owned
+    liveOwners[safeUsername] = safeUsername;
+
+    // Clean up when the live ends or connection drops
+    connection.on('streamEnd', () => {
+      console.log(`📴 Stream ended for ${rawUsername}, releasing lock`);
+      delete liveOwners[safeUsername];
+      delete connections[safeUsername];
+    });
+
+    connection.on('disconnected', () => {
+      console.log(`🔌 Disconnected from ${rawUsername}, releasing lock`);
+      delete liveOwners[safeUsername];
+      delete connections[safeUsername];
+    });
 
     console.log("✅ Connected:", rawUsername);
 
@@ -285,27 +314,8 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
   } catch (err) {
     console.error("❌ Failed:", err.message);
     delete connections[safeUsername];
+    delete liveOwners[safeUsername];
     res.status(500).send("Failed to connect");
-  }
-});
-
-// =========================
-// 🚨 BYPASS ALERT ENDPOINT
-// =========================
-app.post('/bypass-alert', async (req, res) => {
-  const { username } = req.body;
-
-  if (!username) return res.status(400).send("Missing username");
-
-  const owner = safeKey(username);
-
-  try {
-    await db.ref(`auctions/${owner}/bypassAlert`).set(Date.now());
-    console.log(`🚨 [${owner}] Bypass alert triggered`);
-    res.send("Alert triggered");
-  } catch (err) {
-    console.error("❌ Bypass alert error:", err);
-    res.status(500).send("Failed to trigger alert");
   }
 });
 
