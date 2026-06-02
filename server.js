@@ -292,7 +292,7 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
 
 app.get('/overlay-password', (req, res) => {
   res.json({
-    password: "rckz2026"
+    password: "rckz2021"
   });
 });
 
