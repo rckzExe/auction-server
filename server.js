@@ -290,6 +290,12 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
   }
 });
 
+app.get('/overlay-password', (req, res) => {
+  res.json({
+    password: "rckz2026"
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
