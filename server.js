@@ -296,42 +296,6 @@ app.get('/overlay-password', (req, res) => {
   });
 });
 
-app.get('/tiktok/lookup', async (req, res) => {
-
-  const username = req.query.username;
-
-  if (!username) {
-    return res.status(400).json({
-      ok: false,
-      error: 'Missing username'
-    });
-  }
-
-  try {
-
-    const response = await fetch(
-      `https://www.tiktok.com/@${username}`
-    );
-
-    const html = await response.text();
-
-   return res.json({
-  username,
-  nickname: username,
-  followers: 0
-});
-
-  } catch (err) {
-
-    console.error(err);
-
-    return res.status(500).json({
-      ok: false,
-      error: err.message
-    });
-  }
-});
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
