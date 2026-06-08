@@ -27,6 +27,11 @@ console.log(
 );
 
 console.log(
+  "KEY SUFFIX:",
+  process.env.FIREBASE_PRIVATE_KEY?.slice(-40)
+);
+
+console.log(
   "SERVER TIME:",
   new Date().toISOString()
 );
