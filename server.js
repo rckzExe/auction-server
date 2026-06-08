@@ -9,31 +9,24 @@ app.use(express.json());
 // 🔥 FIREBASE
 // =========================
 
-console.log("🔥 BEFORE FIREBASE");
-
-console.log(
-  "EMAIL:",
-  process.env.FIREBASE_CLIENT_EMAIL
-);
+console.log("PROJECT:", process.env.FIREBASE_PROJECT_ID);
+console.log("EMAIL:", process.env.FIREBASE_CLIENT_EMAIL);
 
 console.log(
   "KEY START:",
-  process.env.FIREBASE_PRIVATE_KEY.slice(0, 30)
+  process.env.FIREBASE_PRIVATE_KEY?.substring(0, 80)
 );
 
 console.log(
   "KEY END:",
-  process.env.FIREBASE_PRIVATE_KEY.slice(-30)
+  process.env.FIREBASE_PRIVATE_KEY?.substring(
+    process.env.FIREBASE_PRIVATE_KEY.length - 80
+  )
 );
 
 console.log(
-  "PRIVATE KEY LENGTH:",
-  process.env.FIREBASE_PRIVATE_KEY.length
-);
-
-console.log(
-  "PRIVATE KEY LAST 100:",
-  process.env.FIREBASE_PRIVATE_KEY.slice(-100)
+  "KEY LENGTH:",
+  process.env.FIREBASE_PRIVATE_KEY?.length
 );
 
 admin.initializeApp({
@@ -45,19 +38,7 @@ admin.initializeApp({
   databaseURL: "https://auction-app-4e98f-default-rtdb.firebaseio.com"
 });
 
-console.log("🔥 AFTER FIREBASE");
-
 const db = admin.database();
-
-console.log("🔥 AFTER DATABASE");
-
-db.ref("_startup_test")
-  .get()
-  .then(() => console.log("✅ Firebase auth works"))
-  .catch(err => {
-    console.error("❌ Firebase auth failed");
-    console.error(err);
-  });
 
 // =========================
 // 🧠 GLOBAL STATE
