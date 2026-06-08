@@ -8,44 +8,6 @@ app.use(express.json());
 // =========================
 // 🔥 FIREBASE
 // =========================
-console.log("PROJECT:", process.env.FIREBASE_PROJECT_ID);
-console.log("EMAIL:", process.env.FIREBASE_CLIENT_EMAIL);
-
-console.log(
-  "PRIVATE KEY EXISTS:",
-  !!process.env.FIREBASE_PRIVATE_KEY
-);
-
-console.log(
-  "PRIVATE KEY LENGTH:",
-  process.env.FIREBASE_PRIVATE_KEY?.length
-);
-
-console.log(
-  "KEY PREFIX:",
-  process.env.FIREBASE_PRIVATE_KEY?.slice(0, 40)
-);
-
-console.log(
-  "KEY SUFFIX:",
-  process.env.FIREBASE_PRIVATE_KEY?.slice(-40)
-);
-
-console.log(
-  "SERVER TIME:",
-  new Date().toISOString()
-);
-
-console.log(
-  "KEY CONTAINS BEGIN:",
-  process.env.FIREBASE_PRIVATE_KEY.includes("BEGIN PRIVATE KEY")
-);
-
-console.log(
-  "KEY CONTAINS \\n:",
-  process.env.FIREBASE_PRIVATE_KEY.includes("\\n")
-);
-
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -56,6 +18,11 @@ admin.initializeApp({
 });
 
 const db = admin.database();
+
+db.ref("_startup_test")
+  .get()
+  .then(() => console.log("✅ Firebase auth works"))
+  .catch(err => console.error("❌ Firebase auth failed:", err));
 
 // =========================
 // 🧠 GLOBAL STATE
