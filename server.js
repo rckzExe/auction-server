@@ -36,6 +36,16 @@ console.log(
   new Date().toISOString()
 );
 
+console.log(
+  "KEY CONTAINS BEGIN:",
+  process.env.FIREBASE_PRIVATE_KEY.includes("BEGIN PRIVATE KEY")
+);
+
+console.log(
+  "KEY CONTAINS \\n:",
+  process.env.FIREBASE_PRIVATE_KEY.includes("\\n")
+);
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
