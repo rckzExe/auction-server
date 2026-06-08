@@ -8,6 +8,9 @@ app.use(express.json());
 // =========================
 // 🔥 FIREBASE
 // =========================
+
+console.log("🔥 BEFORE FIREBASE");
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -17,7 +20,11 @@ admin.initializeApp({
   databaseURL: "https://auction-app-4e98f-default-rtdb.firebaseio.com"
 });
 
+console.log("🔥 AFTER FIREBASE");
+
 const db = admin.database();
+
+console.log("🔥 AFTER DATABASE");
 
 db.ref("_startup_test")
   .get()
