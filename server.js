@@ -19,6 +19,14 @@ admin.initializeApp({
 
 const db = admin.database();
 
+db.ref("_startup_test")
+  .get()
+  .then(() => console.log("✅ Firebase auth works"))
+  .catch(err => {
+    console.error("❌ Firebase auth failed");
+    console.error(err);
+  });
+
 // =========================
 // 🧠 GLOBAL STATE
 // =========================
