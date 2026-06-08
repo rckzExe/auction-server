@@ -11,6 +11,21 @@ app.use(express.json());
 
 console.log("🔥 BEFORE FIREBASE");
 
+console.log(
+  "EMAIL:",
+  process.env.FIREBASE_CLIENT_EMAIL
+);
+
+console.log(
+  "KEY START:",
+  process.env.FIREBASE_PRIVATE_KEY.slice(0, 30)
+);
+
+console.log(
+  "KEY END:",
+  process.env.FIREBASE_PRIVATE_KEY.slice(-30)
+);
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
