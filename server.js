@@ -8,27 +8,6 @@ app.use(express.json());
 // =========================
 // 🔥 FIREBASE
 // =========================
-
-console.log("PROJECT:", process.env.FIREBASE_PROJECT_ID);
-console.log("EMAIL:", process.env.FIREBASE_CLIENT_EMAIL);
-
-console.log(
-  "KEY START:",
-  process.env.FIREBASE_PRIVATE_KEY?.substring(0, 80)
-);
-
-console.log(
-  "KEY END:",
-  process.env.FIREBASE_PRIVATE_KEY?.substring(
-    process.env.FIREBASE_PRIVATE_KEY.length - 80
-  )
-);
-
-console.log(
-  "KEY LENGTH:",
-  process.env.FIREBASE_PRIVATE_KEY?.length
-);
-
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
