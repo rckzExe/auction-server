@@ -8,6 +8,20 @@ app.use(express.json());
 // =========================
 // 🔥 FIREBASE
 // =========================
+console.log(
+  "KEY AFTER REPLACE LENGTH:",
+  process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n').length
+);
+
+console.log(
+  "KEY AFTER REPLACE ENDS WITH:",
+  JSON.stringify(
+    process.env.FIREBASE_PRIVATE_KEY
+      .replace(/\\n/g, '\n')
+      .slice(-30)
+  )
+);
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
