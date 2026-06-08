@@ -26,6 +26,16 @@ console.log(
   process.env.FIREBASE_PRIVATE_KEY.slice(-30)
 );
 
+console.log(
+  "PRIVATE KEY LENGTH:",
+  process.env.FIREBASE_PRIVATE_KEY.length
+);
+
+console.log(
+  "PRIVATE KEY LAST 100:",
+  process.env.FIREBASE_PRIVATE_KEY.slice(-100)
+);
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
