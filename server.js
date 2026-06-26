@@ -15,11 +15,7 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// v1.2.3 uses WebcastPushConnection + SignConfig for free tier signing
-const { WebcastPushConnection, SignConfig } = require('tiktok-live-connector');
-
-// Set the API key globally before any connection is made
-SignConfig.apiKey = process.env.SIGN_API_KEY;
+const { WebcastPushConnection } = require('tiktok-live-connector');
 
 const connections    = {};
 const processed      = new Set();
@@ -82,6 +78,7 @@ app.post('/connect', async (req, res) => {
       processInitialData: false,
       enableExtendedGiftInfo: true,
       requestPollingIntervalMs: 1000,
+      signApiKey: process.env.SIGN_API_KEY,
     });
   } catch (err) {
     console.error("❌ Failed to create connection:", err.message);
