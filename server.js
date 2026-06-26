@@ -88,20 +88,29 @@ function connectEuler(safeUsername, rawUsername) {
   ws.on('message', async (raw) => {
     try {
       const msg = JSON.parse(raw);
-      // LOG messages so we can see EulerStream format
-      if (!ws._logCount) ws._logCount = 0;
-      if (ws._logCount < 20) { console.log(`📦 MSG [${safeUsername}]:`, JSON.stringify(msg).slice(0, 400)); ws._logCount++; }
-      const event = msg.event || msg.type;
+      // EulerStream wraps events in a messages array
+      const messages = msg.messages || [msg];
 
+      for (const item of messages) {
+        const event = item.type || item.event;
+        const data  = item.data || item;
+        await handleEvent(safeUsername, event, data);
+      }
+  } catch (e) {
+    console.error('❌ Event error:', e.message);
+  }
+}
+
+async function handleEvent(safeUsername, event, data) {
+  try {
       // ── GIFT ──
-      if (event === 'gift') {
-        const data = msg.data || msg;
+      if (event === 'WebcastGiftMessage' || event === 'gift') {
         const id = data.msgId || `${data.userId}-${data.giftId}-${Date.now()}`;
         if (processed.has(id)) return;
         processed.add(id);
         setTimeout(() => processed.delete(id), 5000);
 
-        const rawUser = data.uniqueId || 'unknown';
+        const rawUser = data.uniqueId || data.user?.uniqueId || 'unknown';
         const user = safeKey(rawUser);
 
         const snap = await db.ref(`auctions/${safeUsername}`).once('value');
@@ -110,8 +119,8 @@ function connectEuler(safeUsername, rawUsername) {
         if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
         let value = 0;
-        const giftName = (data.giftName || '').toLowerCase();
-        const repeat = data.repeatCount || 1;
+        const giftName = (data.giftName || data.gift?.name || '').toLowerCase();
+        const repeat = data.repeatCount || data.repeatEnd ? (data.repeatCount || 1) : 1;
 
         if (giftName.includes('rose') || giftName.includes('heart me')) {
           value = repeat;
@@ -131,19 +140,18 @@ function connectEuler(safeUsername, rawUsername) {
         }
 
         addToBuffer(safeUsername, user, rawUser, value,
-          data.profilePictureUrl || data.user?.profilePictureUrl);
+          data.user?.profilePictureUrl || data.profilePictureUrl || '');
       }
 
       // ── CHAT / VOUCH ──
-      if (event === 'chat') {
-        const data = msg.data || msg;
+      if (event === 'WebcastChatMessage' || event === 'chat') {
         const message = (data.comment || '').toLowerCase();
         const id = data.msgId || `${data.userId}-${Date.now()}`;
         if (processedChats.has(id)) return;
         processedChats.add(id);
         setTimeout(() => processedChats.delete(id), 5000);
 
-        const rawUser = data.uniqueId || '';
+        const rawUser = data.uniqueId || data.user?.uniqueId || '';
         const user = safeKey(rawUser);
 
         const snap = await db.ref(`auctions/${safeUsername}`).once('value');
@@ -175,12 +183,9 @@ function connectEuler(safeUsername, rawUsername) {
         console.log(`💬 WORD VOUCH from ${top.name}`);
       }
 
-    } catch (e) {
-      console.error('❌ Message error:', e.message);
-    }
-  });
-
-  return ws;
+  } catch (e) {
+    console.error('❌ Event error:', e.message);
+  }
 }
 
 // ── ENDPOINTS ──
