@@ -97,6 +97,8 @@ app.post('/connect', async (req, res) => {
       enableExtendedGiftInfo: true,
       enableWebsocketUpgrade: true,
       requestPollingIntervalMs: 1000,
+      signProvider: undefined,
+      signApiKey: undefined,
     });
   } catch (err) {
     console.error("❌ Failed to create connection:", err.message);
