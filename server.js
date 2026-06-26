@@ -189,6 +189,8 @@ function connectEuler(safeUsername, rawUsername) {
         const type = item.type || item.event || '';
         const data = item.data || item;
         if (type === 'WebcastGiftMessage') {
+          // Log full gift data so we can see exact structure
+          console.log('🎁 RAW GIFT:', JSON.stringify(data).slice(0, 600));
           handleGift(safeUsername, data);
         } else if (type === 'WebcastChatMessage') {
           handleChat(safeUsername, data);
