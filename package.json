@@ -1,40 +1,14 @@
 {
-  "name": "tiktok-auction-app",
-  "version": "1.0.7",
-  "main": "main.js",
+  "name": "rckz-auction-server",
+  "version": "1.0.0",
+  "main": "server.js",
   "type": "commonjs",
-  "dependencies": {
-    "express": "^4.22.2",
-    "express-session": "^1.19.0",
-    "firebase-admin": "^11.11.0",
-    "passport": "^0.7.0",
-    "passport-discord": "^0.1.4",
-    "tiktok-live-connector": "^1.1.9"
-  },
-  "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.6.0"
-  },
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder"
+    "start": "node server.js"
   },
-  "build": {
-    "appId": "com.tiktok.auctionapp",
-    "productName": "TikTok Auction App",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "**/*"
-    ],
-    "asar": true,
-    "win": {
-      "target": "nsis"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
+  "dependencies": {
+    "express": "^4.18.2",
+    "firebase-admin": "^11.11.0",
+    "tiktok-live-connector": "1.2.3"
   }
 }
