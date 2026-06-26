@@ -20,7 +20,7 @@ const processed      = new Set();
 const processedChats = new Set();
 const giftBuffer     = {};
 const vouchCooldown  = {};
-const FLUSH_DELAY    = 250;
+const FLUSH_DELAY    = 50;
 
 function safeKey(str) {
   return str.replace(/[.#$[\]]/g, '_');
