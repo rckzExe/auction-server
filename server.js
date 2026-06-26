@@ -146,21 +146,47 @@ async function handleChat(safeUsername, data) {
 }
 
 function disconnectSafe(safeUsername) {
+  // Clear rawUsernames first so the close handler doesn't auto-reconnect
+  delete rawUsernames[safeUsername];
   try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
 
-function connectEuler(safeUsername, rawUsername) {
+// Track raw usernames for reconnect
+const rawUsernames = {};
+
+function connectEuler(safeUsername, rawUsername, isReconnect) {
   const apiKey = process.env.SIGN_API_KEY || '';
   const url    = 'wss://ws.eulerstream.com?uniqueId=' + encodeURIComponent(rawUsername) + '&apiKey=' + encodeURIComponent(apiKey);
 
-  console.log('🚀 Connecting via EulerStream WS: ' + rawUsername);
+  rawUsernames[safeUsername] = rawUsername;
+
+  if (!isReconnect) console.log('🚀 Connecting via EulerStream WS: ' + rawUsername);
+  else console.log('♻️ Reconnecting: ' + rawUsername);
+
   const ws = new WebSocket(url);
   connections[safeUsername] = ws;
 
-  ws.on('open',    function()      { console.log('✅ Connected: ' + rawUsername); });
-  ws.on('close',   function(c, r)  { console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + r); delete connections[safeUsername]; });
-  ws.on('error',   function(e)     { console.error('❌ [' + safeUsername + '] WS error:', e.message); delete connections[safeUsername]; });
+  ws.on('open', function() { console.log('✅ Connected: ' + rawUsername); });
+
+  ws.on('close', function(c, r) {
+    console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + r);
+    delete connections[safeUsername];
+    // Auto-reconnect after 3 seconds if we still have a record of this user
+    if (rawUsernames[safeUsername]) {
+      console.log('🔄 Auto-reconnecting ' + rawUsername + ' in 3s...');
+      setTimeout(function() {
+        if (!connections[safeUsername] && rawUsernames[safeUsername]) {
+          connectEuler(safeUsername, rawUsernames[safeUsername], true);
+        }
+      }, 3000);
+    }
+  });
+
+  ws.on('error', function(e) {
+    console.error('❌ [' + safeUsername + '] WS error:', e.message);
+    delete connections[safeUsername];
+  });
 
   ws.on('message', function(raw) {
     try {
