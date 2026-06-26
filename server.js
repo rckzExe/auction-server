@@ -117,24 +117,14 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
- if (connections[safeUsername]) {
-  if (connections[safeUsername].getState().isConnected) {
-    console.log("Already connected:", rawUsername);
-    return res.send("Already connected");
-  } else {
+  if (connections[safeUsername]) {
+    console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
   }
-}
 
   console.log("🚀 Connecting:", rawUsername);
 
-console.log("Euler API Key loaded:", !!process.env.EULER_API_KEY);
-
-  const connection = new WebcastPushConnection(rawUsername, {
-  signProviderOptions: {
-    apiKey: process.env.EULER_API_KEY
-  }
-});
+  const connection = new WebcastPushConnection(rawUsername);
   connections[safeUsername] = connection;
 
   try {
