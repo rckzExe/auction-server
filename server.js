@@ -32,7 +32,7 @@ const vouchCooldown = {};
 const FLUSH_DELAY = 250;
 
 // =========================
-// 🔧 SAFE KEY FUNCTION
+// 🔧 SAFE KEY
 // =========================
 function safeKey(str) {
   return str.replace(/[.#$[\]]/g, "_");
@@ -42,7 +42,6 @@ function safeKey(str) {
 // 🧠 BUFFER SYSTEM
 // =========================
 function addToBuffer(owner, user, rawUser, amount, photo) {
-
   const key = `${owner}_${user}`;
 
   if (!giftBuffer[key]) {
@@ -55,7 +54,6 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
   }
 
   giftBuffer[key].score += amount;
-
   clearTimeout(giftBuffer[key].timeout);
 
   giftBuffer[key].timeout = setTimeout(async () => {
@@ -64,51 +62,40 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 
     try {
       const ref = db.ref(`auctions/${owner}/players/${user}`);
-
       await ref.transaction(current => {
         if (!current) {
-          return {
-            name: data.name,
-            score: data.score,
-            photoUrl: data.photoUrl
-          };
+          return { name: data.name, score: data.score, photoUrl: data.photoUrl };
         }
-
-        return {
-          ...current,
-          score: (current.score || 0) + data.score
-        };
+        return { ...current, score: (current.score || 0) + data.score };
       });
-
       console.log(`✅ [${owner}] ${data.name} +${data.score}`);
-
     } catch (err) {
       console.error("❌ Firebase error:", err);
     }
-
   }, FLUSH_DELAY);
 }
 
 // =========================
-// 🔌 SAFE CONNECT FUNCTION
+// 🔌 DISCONNECT HELPER
 // =========================
-async function safeConnect(connection) {
-  return Promise.race([
-    connection.connect(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Connection timeout")), 10000)
-    )
-  ]);
+function disconnectSafe(safeUsername) {
+  try {
+    const conn = connections[safeUsername];
+    if (conn) {
+      conn.disconnect();
+    }
+  } catch (e) {
+    // ignore disconnect errors
+  } finally {
+    delete connections[safeUsername];
+  }
 }
 
 // =========================
 // 🔌 CONNECT ENDPOINT
 // =========================
 app.post('/connect', async (req, res) => {
-
   const rawUsername = req.body.username;
-  
-
   console.log("📥 /connect hit with:", rawUsername);
 
   if (!rawUsername) {
@@ -117,29 +104,71 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
 
+  // Clean up any existing connection first
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
-    delete connections[safeUsername];
+    disconnectSafe(safeUsername);
   }
 
   console.log("🚀 Connecting:", rawUsername);
 
-  const connection = new WebcastPushConnection(rawUsername);
+  let connection;
+  try {
+    connection = new WebcastPushConnection(rawUsername, {
+      processInitialData: false,
+      enableExtendedGiftInfo: true,
+      enableWebsocketUpgrade: true,
+      requestPollingIntervalMs: 1000,
+      sessionId: undefined,
+    });
+  } catch (err) {
+    console.error("❌ Failed to create connection object:", err.message);
+    return res.status(500).send("Failed to create connection");
+  }
+
   connections[safeUsername] = connection;
 
+  // ── HANDLE DISCONNECTS ──
+  connection.on('disconnected', () => {
+    console.log(`⚠️ [${safeUsername}] Disconnected from TikTok`);
+    delete connections[safeUsername];
+  });
+
+  connection.on('error', (err) => {
+    console.error(`❌ [${safeUsername}] Connection error:`, err?.message || err);
+  });
+
+  // ── ATTEMPT CONNECT WITH TIMEOUT ──
+  let connected = false;
   try {
-    await safeConnect(connection);
-
+    await Promise.race([
+      connection.connect(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Connection timeout after 12s")), 12000)
+      )
+    ]);
+    connected = true;
     console.log("✅ Connected:", rawUsername);
+  } catch (err) {
+    console.error("❌ Failed to connect:", err.message);
+    disconnectSafe(safeUsername);
+    return res.status(500).send("Failed to connect: " + err.message);
+  }
 
-    // =========================
-    // 🎁 GIFT HANDLER
-    // =========================
-    connection.on('gift', async (data) => {
+  if (!connected) {
+    return res.status(500).send("Connection failed");
+  }
 
-      const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
+  // =========================
+  // 🎁 GIFT HANDLER
+  // =========================
+  connection.on('gift', async (data) => {
+    try {
+      // Guard: data must exist
+      if (!data) return;
+
+      const id = data.msgId || `${data.userId}-${data.giftId}-${Date.now()}`;
       if (processed.has(id)) return;
-
       processed.add(id);
       setTimeout(() => processed.delete(id), 5000);
 
@@ -153,14 +182,12 @@ app.post('/connect', async (req, res) => {
       if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
       let value = 0;
-
       const giftName = (data.giftName || "").toLowerCase();
       const repeat = data.repeatCount || 1;
 
       if (giftName.includes("rose") || giftName.includes("heart me")) {
         value = repeat;
       } else {
-
         const giftValues = {
           5655: 5,
           5760: 30,
@@ -168,33 +195,21 @@ app.post('/connect', async (req, res) => {
         };
 
         let baseValue;
-
         if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
           baseValue = giftValues[data.giftId];
         } else {
           baseValue = data.diamondCount || 1;
         }
-
         value = baseValue * repeat;
       }
 
+      // Handle streak gifts
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
-
-        lastStreak[user] = {
-          time: Date.now(),
-          amount: value
-        };
+        lastStreak[user] = { time: Date.now(), amount: value };
       } else {
         const last = lastStreak[user];
-
-        if (
-          last &&
-          value === 1 &&
-          (Date.now() - last.time < 1200)
-        ) {
-          return;
-        }
+        if (last && value === 1 && (Date.now() - last.time < 1200)) return;
       }
 
       addToBuffer(
@@ -204,100 +219,100 @@ app.post('/connect', async (req, res) => {
         value,
         data.profilePictureUrl || data.user?.profilePictureUrl
       );
-    });
 
-    // =========================
-    // ⭐ VOUCH SYSTEM (FIXED)
-    // =========================
-    connection.on('chat', async (data) => {
+    } catch (err) {
+      console.error("❌ Gift handler error:", err.message);
+    }
+  });
 
-  const message = (data.comment || "").toLowerCase();
-  const id = data.msgId || `${data.userId}-${data.timestamp}`;
+  // =========================
+  // ⭐ VOUCH SYSTEM
+  // =========================
+  connection.on('chat', async (data) => {
+    try {
+      if (!data) return;
 
-  if (processedChats.has(id)) return;
-  processedChats.add(id);
-  setTimeout(() => processedChats.delete(id), 5000);
+      const message = (data.comment || "").toLowerCase();
+      const id = data.msgId || `${data.userId}-${Date.now()}`;
 
-  const rawUser = data.uniqueId || "";
-  const user = safeKey(rawUser);
+      if (processedChats.has(id)) return;
+      processedChats.add(id);
+      setTimeout(() => processedChats.delete(id), 5000);
 
-  try {
-    const snap = await db.ref(`auctions/${safeUsername}`).once("value");
-    const auction = snap.val();
+      const rawUser = data.uniqueId || "";
+      const user = safeKey(rawUser);
 
-    if (!auction || !auction.active) return;
+      const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+      const auction = snap.val();
 
-    const words = auction.vouchWords || [];
+      if (!auction || !auction.active) return;
 
-    // 🔥 CHECK IF MESSAGE CONTAINS ANY WORD
-    const triggered = words.some(word =>
-  typeof word === "string" && message.includes(word.toLowerCase())
-);
+      const words = auction.vouchWords || [];
+      const triggered = words.some(word =>
+        typeof word === "string" && message.includes(word.toLowerCase())
+      );
+      if (!triggered) return;
 
-    if (!triggered) return;
+      // Get current leader
+      const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
+      const players = playersSnap.val() || {};
 
-    // 🏆 GET CURRENT LEADER
-    const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
-    const players = playersSnap.val() || {};
+      let top = null;
+      Object.values(players).forEach(p => {
+        if (!top || p.score > top.score) top = p;
+      });
 
-    let top = null;
+      if (!top) return;
+      if (!top.name || !rawUser) return;
+      if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
 
-    Object.values(players).forEach(p => {
-      if (!top || p.score > top.score) top = p;
-    });
+      // Cooldown
+      const key = `${safeUsername}_${user}`;
+      if (vouchCooldown[key]) return;
+      vouchCooldown[key] = true;
+      setTimeout(() => delete vouchCooldown[key], 3000);
 
-    if (!top) return;
+      if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
 
-    // ✅ ONLY WINNER CAN TRIGGER
-   if (!top.name || !rawUser) return;
+      // Add vouch
+      await db.ref(`users/${safeUsername}/vouches`).transaction(v => (v || 0) + 1);
+      await db.ref(`auctions/${safeUsername}/vouchedUsers/${user}`).set(true);
+      await db.ref(`auctions/${safeUsername}/lastVouch`).set({ user: top.name, time: Date.now() });
 
-if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
+      console.log(`💬 WORD VOUCH from ${top.name}`);
 
-    // ⏱ COOLDOWN
-    const key = `${safeUsername}_${user}`;
-    if (vouchCooldown[key]) return;
+    } catch (err) {
+      console.error("❌ Chat/vouch error:", err.message);
+    }
+  });
 
-    vouchCooldown[key] = true;
-    setTimeout(() => delete vouchCooldown[key], 3000);
-
-   if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
-
-    // ➕ ADD VOUCH
-    await db.ref(`users/${safeUsername}/vouches`)
-      .transaction(v => (v || 0) + 1);
-
-   await db.ref(`auctions/${safeUsername}/vouchedUsers/${user}`).set(true);
-
-    // 💥 TRIGGER OVERLAY
-    await db.ref(`auctions/${safeUsername}/lastVouch`).set({
-  user: top.name,
-  time: Date.now()
+  res.send("Connected");
 });
 
-    console.log(`💬 WORD VOUCH from ${top.name}`);
-
-  } catch (err) {
-    console.error("Vouch error:", err);
-  }
+// =========================
+// 🔌 DISCONNECT ENDPOINT
+// =========================
+app.post('/disconnect', (req, res) => {
+  const rawUsername = req.body.username;
+  if (!rawUsername) return res.status(400).send("Missing username");
+  const safeUsername = safeKey(rawUsername);
+  disconnectSafe(safeUsername);
+  console.log("⛔ Disconnected:", rawUsername);
+  res.send("Disconnected");
 });
 
-    res.send("Connected");
-
-  } catch (err) {
-    console.error("❌ Failed:", err.message);
-    delete connections[safeUsername];
-    res.status(500).send("Failed to connect");
-  }
+// =========================
+// ❤️ HEALTH CHECK
+// =========================
+app.get('/health', (req, res) => {
+  res.json({ status: "ok", connections: Object.keys(connections).length });
 });
 
 app.get('/overlay-password', (req, res) => {
-  res.json({
-    password: "rckz2026"
-  });
+  res.json({ password: "rckz2026" });
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log(`🌐 Server running on port ${PORT}`);
 });
