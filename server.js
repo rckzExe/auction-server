@@ -288,33 +288,47 @@ function connectEuler(safeUsername, rawUsername) {
     delete connections[safeUsername];
   });
 
-  ws.on('message', function(raw) {
-    try {
-      const msg = JSON.parse(raw);
-      const items = msg.messages || [msg];
-      items.forEach(function(item) {
-        const type = item.type || item.event || '';
-        const data = item.data || item;
-       if (
-  type === 'WebcastGiftMessage' ||
-  type.toLowerCase().includes('gift')
-) {
-  console.log('🎁 EVENT:', type);
-  console.log('🎁 RAW:', JSON.stringify(data).slice(0, 1500));
+ ws.on('message', function(raw) {
+  try {
+    const msg = JSON.parse(raw);
+    const items = msg.messages || msg.events || msg.data?.messages || [msg];
 
-  handleGift(safeUsername, data);
+    items.forEach(function(item) {
+      const eventName = String(
+        item.type ||
+        item.event ||
+        item.method ||
+        item.messageType ||
+        item.name ||
+        item.data?.type ||
+        item.data?.event ||
+        ''
+      ).toLowerCase();
 
-} else if (
-  type === 'WebcastChatMessage' ||
-  type.toLowerCase().includes('chat')
-) {
-  handleChat(safeUsername, data);
-}
-      });
-    } catch (e) {
-      console.error('❌ Parse error:', e.message);
-    }
-  });
+      const data = item.data || item.payload || item.message || item;
+
+      const isGift =
+        eventName.includes('gift') ||
+        data.gift ||
+        data.giftId ||
+        data.giftName ||
+        data.gift_id;
+
+      const isChat =
+        eventName.includes('chat') ||
+        eventName.includes('comment') ||
+        data.comment;
+
+      if (isGift) {
+        handleGift(safeUsername, data);
+      } else if (isChat) {
+        handleChat(safeUsername, data);
+      }
+    });
+  } catch (e) {
+    console.error('❌ Parse error:', e.message);
+  }
+});
 
   return ws;
 }
