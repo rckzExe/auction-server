@@ -167,10 +167,19 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
   const ws = new WebSocket(url);
   connections[safeUsername] = ws;
 
-  ws.on('open', function() { console.log('✅ Connected: ' + rawUsername); });
+  ws.on('open', function() {
+    console.log('✅ Connected: ' + rawUsername);
+    // Send a ping every 30s to keep the connection alive
+    ws._pingInterval = setInterval(function() {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
+  });
 
   ws.on('close', function(c, r) {
     console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + r);
+    if (ws._pingInterval) clearInterval(ws._pingInterval);
     delete connections[safeUsername];
     // Auto-reconnect after 3 seconds if we still have a record of this user
     if (rawUsernames[safeUsername]) {
