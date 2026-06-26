@@ -32,7 +32,6 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
     giftBuffer[key] = { name: rawUser, score: 0, photoUrl: photo || '', timeout: null };
   }
   giftBuffer[key].score += amount;
-  // Update photo if we got one
   if (photo) giftBuffer[key].photoUrl = photo;
   clearTimeout(giftBuffer[key].timeout);
   giftBuffer[key].timeout = setTimeout(async function() {
@@ -50,25 +49,33 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
   }, FLUSH_DELAY);
 }
 
-// ── Extract profile picture from EulerStream data ──
 function getPhoto(data) {
-  // EulerStream nests user info under data.user
   const u = data.user || {};
-  return u.profilePictureUrl
-    || (u.avatarThumb && (Array.isArray(u.avatarThumb.urlList) ? u.avatarThumb.urlList[0] : u.avatarThumb))
-    || (u.avatarMedium && (Array.isArray(u.avatarMedium.urlList) ? u.avatarMedium.urlList[0] : u.avatarMedium))
-    || data.profilePictureUrl
-    || '';
+  // Try multiple possible locations
+  if (u.profilePictureUrl) return u.profilePictureUrl;
+  if (u.avatarThumb) {
+    if (typeof u.avatarThumb === 'string') return u.avatarThumb;
+    if (u.avatarThumb.urlList && u.avatarThumb.urlList[0]) return u.avatarThumb.urlList[0];
+  }
+  if (u.avatarMedium) {
+    if (typeof u.avatarMedium === 'string') return u.avatarMedium;
+    if (u.avatarMedium.urlList && u.avatarMedium.urlList[0]) return u.avatarMedium.urlList[0];
+  }
+  if (u.avatar && u.avatar.urlList && u.avatar.urlList[0]) return u.avatar.urlList[0];
+  return data.profilePictureUrl || '';
 }
 
 async function handleGift(safeUsername, data) {
   try {
-    // ── DEDUP: use msgId only ──
-    const id = data.msgId || data.common && data.common.msgId;
-    if (!id) return; // skip if no ID to dedup with
-    if (processed.has(id)) return;
-    processed.add(id);
-    setTimeout(function() { processed.delete(id); }, 10000);
+    // msgId is nested under data.common in EulerStream
+    const common = data.common || {};
+    const msgId = common.msgId || data.msgId;
+    if (!msgId) return;
+
+    // DEDUP — each unique msgId only processed once
+    if (processed.has(msgId)) return;
+    processed.add(msgId);
+    setTimeout(function() { processed.delete(msgId); }, 15000);
 
     const rawUser = (data.user && data.user.uniqueId) || data.uniqueId || 'unknown';
     const user = safeKey(rawUser);
@@ -79,28 +86,32 @@ async function handleGift(safeUsername, data) {
     if (!auction || !auction.active) return;
     if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
-    // ── STREAK GIFTS: only count on repeatEnd ──
-    // giftType 1 = streak gift (e.g. roses held down)
-    // Only process when repeatEnd = true (final count)
-    if (data.giftType === 1 && !data.repeatEnd) return;
+    // EulerStream gift fields
+    const gift = data.gift || {};
+    const giftName = (gift.name || data.giftName || common.describe || '').toLowerCase();
+    const repeatCount = data.repeatCount || gift.repeatCount || 1;
+    const repeatEnd = data.repeatEnd || gift.repeatEnd || false;
+    const giftType = data.giftType || gift.type || 0;
+    const diamondCount = gift.diamondCount || data.diamondCount || 0;
 
-    const giftName = (data.giftName || '').toLowerCase();
-    const repeat = data.repeatCount || 1;
+    // Streak gifts (held down) — only count on final message
+    if (giftType === 1 && !repeatEnd) return;
+
     let value = 0;
 
-    if (giftName === 'rose' || giftName === 'heart me') {
-      // Rose = 1 coin each
-      value = repeat * 1;
+    if (giftName.includes('rose')) {
+      // Rose = 1 diamond each
+      value = repeatCount * 1;
+    } else if (diamondCount > 0) {
+      value = diamondCount * repeatCount;
     } else {
-      // Use diamond count directly — most accurate
-      const diamonds = data.diamondCount || 0;
-      value = diamonds * repeat;
-      if (value === 0) value = repeat; // fallback
+      // Fallback: count as 1 per gift
+      value = repeatCount;
     }
 
     if (value <= 0) return;
 
-    console.log('🎁 Gift: ' + giftName + ' x' + repeat + ' = ' + value + ' coins from ' + rawUser);
+    console.log('🎁 ' + rawUser + ' sent ' + giftName + ' x' + repeatCount + ' (' + diamondCount + ' diamonds each) = ' + value + ' coins');
     addToBuffer(safeUsername, user, rawUser, value, photo);
   } catch (e) {
     console.error('❌ Gift error:', e.message);
@@ -109,13 +120,14 @@ async function handleGift(safeUsername, data) {
 
 async function handleChat(safeUsername, data) {
   try {
-    const message = (data.comment || '').toLowerCase();
-    const id = data.msgId || (data.common && data.common.msgId);
-    if (!id) return;
-    if (processedChats.has(id)) return;
-    processedChats.add(id);
-    setTimeout(function() { processedChats.delete(id); }, 5000);
+    const common = data.common || {};
+    const msgId = common.msgId || data.msgId;
+    if (!msgId) return;
+    if (processedChats.has(msgId)) return;
+    processedChats.add(msgId);
+    setTimeout(function() { processedChats.delete(msgId); }, 5000);
 
+    const message = (data.comment || '').toLowerCase();
     const rawUser = (data.user && data.user.uniqueId) || data.uniqueId || '';
     const user = safeKey(rawUser);
 
@@ -189,15 +201,13 @@ function connectEuler(safeUsername, rawUsername) {
         const type = item.type || item.event || '';
         const data = item.data || item;
         if (type === 'WebcastGiftMessage') {
-          // Log full gift data so we can see exact structure
-          console.log('🎁 RAW GIFT:', JSON.stringify(data).slice(0, 600));
           handleGift(safeUsername, data);
         } else if (type === 'WebcastChatMessage') {
           handleChat(safeUsername, data);
         }
       });
     } catch (e) {
-      console.error('❌ Message parse error:', e.message);
+      console.error('❌ Parse error:', e.message);
     }
   });
 
