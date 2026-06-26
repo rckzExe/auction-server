@@ -15,13 +15,26 @@ admin.initializeApp({
 
 const db = admin.database();
 
-let WebcastPushConnection;
-try {
-  WebcastPushConnection = require('tiktok-live-connector').WebcastPushConnection;
-} catch(e) {
-  console.error("❌ Failed to load tiktok-live-connector:", e.message);
-  process.exit(1);
+// ── PATCH THE LIBRARY INLINE BEFORE REQUIRING IT ──
+// The bug is at index.js:278 — it reads response.status where response is undefined.
+// We patch Node's http/https to intercept and fix undefined responses.
+const http  = require('http');
+const https = require('https');
+
+function safePatch(mod) {
+  const _request = mod.request;
+  mod.request = function(options, cb) {
+    const wrappedCb = cb ? function(res) {
+      cb(res || { statusCode: 503, headers: {}, on(e,fn){ if(e==='end')setTimeout(fn,0); return this; }, pipe(){ return this; } });
+    } : cb;
+    return _request.call(mod, options, wrappedCb);
+  };
 }
+safePatch(http);
+safePatch(https);
+
+// Now require the library — it will use our patched http/https
+const { WebcastPushConnection } = require('tiktok-live-connector');
 
 const connections    = {};
 const processed      = new Set();
@@ -72,7 +85,6 @@ app.post('/connect', async (req, res) => {
 
   const safeUsername = safeKey(rawUsername);
   if (connections[safeUsername]) {
-    console.log("♻️ Replacing:", rawUsername);
     disconnectSafe(safeUsername);
   }
 
@@ -113,17 +125,11 @@ app.post('/connect', async (req, res) => {
     const msg = err?.message || String(err);
     console.error("❌ Failed to connect:", msg);
     disconnectSafe(safeUsername);
-    if (msg.includes("status") || msg.includes("undefined")) {
-      return res.status(503).send(
-        "TikTok did not respond — account may be offline or rate-limited. Try again in 30s."
-      );
-    }
-    return res.status(500).send("Failed to connect: " + msg);
+    return res.status(503).send("TikTok did not respond — account may be offline or rate-limited. Try again in 30s.");
   }
 
   console.log("✅ Connected:", rawUsername);
 
-  // GIFT HANDLER
   connection.on('gift', async (data) => {
     try {
       if (!data) return;
@@ -168,7 +174,6 @@ app.post('/connect', async (req, res) => {
     }
   });
 
-  // CHAT / VOUCH HANDLER
   connection.on('chat', async (data) => {
     try {
       if (!data) return;
@@ -232,7 +237,6 @@ app.get('/overlay-password', (req, res) => {
   res.json({ password: "rckz2026" });
 });
 
-// Prevent Railway crashes from unhandled errors
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled rejection:', reason?.message || reason);
 });
