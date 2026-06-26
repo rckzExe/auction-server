@@ -1,5 +1,5 @@
-const express  = require('express');
-const admin    = require('firebase-admin');
+const express   = require('express');
+const admin     = require('firebase-admin');
 const WebSocket = require('ws');
 
 const app = express();
@@ -49,69 +49,46 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
   }, FLUSH_DELAY);
 }
 
-function getPhoto(data) {
-  const u = data.user || {};
-  // Try multiple possible locations
-  if (u.profilePictureUrl) return u.profilePictureUrl;
-  if (u.avatarThumb) {
-    if (typeof u.avatarThumb === 'string') return u.avatarThumb;
-    if (u.avatarThumb.urlList && u.avatarThumb.urlList[0]) return u.avatarThumb.urlList[0];
-  }
-  if (u.avatarMedium) {
-    if (typeof u.avatarMedium === 'string') return u.avatarMedium;
-    if (u.avatarMedium.urlList && u.avatarMedium.urlList[0]) return u.avatarMedium.urlList[0];
-  }
-  if (u.avatar && u.avatar.urlList && u.avatar.urlList[0]) return u.avatar.urlList[0];
-  return data.profilePictureUrl || '';
-}
-
 async function handleGift(safeUsername, data) {
   try {
-    // msgId is nested under data.common in EulerStream
     const common = data.common || {};
-    const msgId = common.msgId || data.msgId;
+    const msgId  = common.msgId || data.msgId;
     if (!msgId) return;
 
-    // DEDUP — each unique msgId only processed once
+    // repeatEnd is 0 or 1 (not boolean) — only process the final message
+    const repeatEnd = data.repeatEnd;
+    if (repeatEnd === 0 || repeatEnd === false) return;
+
+    // Dedup on msgId
     if (processed.has(msgId)) return;
     processed.add(msgId);
     setTimeout(function() { processed.delete(msgId); }, 15000);
 
-    const rawUser = (data.user && data.user.uniqueId) || data.uniqueId || 'unknown';
-    const user = safeKey(rawUser);
-    const photo = getPhoto(data);
+    // User info
+    const userObj  = data.user || {};
+    const rawUser  = userObj.uniqueId || data.uniqueId || 'unknown';
+    const user     = safeKey(rawUser);
 
-    const snap = await db.ref('auctions/' + safeUsername).once('value');
+    // Profile picture is at data.user.profilePicture.url[0]
+    const picObj   = userObj.profilePicture || {};
+    const picUrls  = picObj.url || [];
+    const photo    = picUrls[0] || '';
+
+    // Gift details are at data.giftDetails
+    const details      = data.giftDetails || {};
+    const giftName     = (details.giftName || '').toLowerCase();
+    const diamondCount = details.diamondCount || 0;
+    const repeatCount  = data.repeatCount || 1;
+
+    const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
     if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
-    // EulerStream gift fields
-    const gift = data.gift || {};
-    const giftName = (gift.name || data.giftName || common.describe || '').toLowerCase();
-    const repeatCount = data.repeatCount || gift.repeatCount || 1;
-    const repeatEnd = data.repeatEnd || gift.repeatEnd || false;
-    const giftType = data.giftType || gift.type || 0;
-    const diamondCount = gift.diamondCount || data.diamondCount || 0;
+    // Calculate value: diamondCount per gift × repeat count
+    const value = (diamondCount > 0 ? diamondCount : 1) * repeatCount;
 
-    // Streak gifts (held down) — only count on final message
-    if (giftType === 1 && !repeatEnd) return;
-
-    let value = 0;
-
-    if (giftName.includes('rose')) {
-      // Rose = 1 diamond each
-      value = repeatCount * 1;
-    } else if (diamondCount > 0) {
-      value = diamondCount * repeatCount;
-    } else {
-      // Fallback: count as 1 per gift
-      value = repeatCount;
-    }
-
-    if (value <= 0) return;
-
-    console.log('🎁 ' + rawUser + ' sent ' + giftName + ' x' + repeatCount + ' (' + diamondCount + ' diamonds each) = ' + value + ' coins');
+    console.log('🎁 ' + rawUser + ' | ' + giftName + ' x' + repeatCount + ' | ' + diamondCount + ' diamonds each | = ' + value + ' coins');
     addToBuffer(safeUsername, user, rawUser, value, photo);
   } catch (e) {
     console.error('❌ Gift error:', e.message);
@@ -121,28 +98,29 @@ async function handleGift(safeUsername, data) {
 async function handleChat(safeUsername, data) {
   try {
     const common = data.common || {};
-    const msgId = common.msgId || data.msgId;
+    const msgId  = common.msgId || data.msgId;
     if (!msgId) return;
     if (processedChats.has(msgId)) return;
     processedChats.add(msgId);
     setTimeout(function() { processedChats.delete(msgId); }, 5000);
 
-    const message = (data.comment || '').toLowerCase();
-    const rawUser = (data.user && data.user.uniqueId) || data.uniqueId || '';
-    const user = safeKey(rawUser);
+    const message  = (data.comment || '').toLowerCase();
+    const userObj  = data.user || {};
+    const rawUser  = userObj.uniqueId || data.uniqueId || '';
+    const user     = safeKey(rawUser);
 
-    const snap = await db.ref('auctions/' + safeUsername).once('value');
+    const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
 
-    const words = auction.vouchWords || [];
+    const words     = auction.vouchWords || [];
     const triggered = words.some(function(w) {
       return typeof w === 'string' && message.includes(w.toLowerCase());
     });
     if (!triggered) return;
 
     const playersSnap = await db.ref('auctions/' + safeUsername + '/players').once('value');
-    const players = playersSnap.val() || {};
+    const players     = playersSnap.val() || {};
     let top = null;
     Object.values(players).forEach(function(p) {
       if (!top || p.score > top.score) top = p;
@@ -168,44 +146,31 @@ async function handleChat(safeUsername, data) {
 }
 
 function disconnectSafe(safeUsername) {
-  try {
-    const ws = connections[safeUsername];
-    if (ws) ws.close();
-  } catch (e) {}
+  try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
 
 function connectEuler(safeUsername, rawUsername) {
   const apiKey = process.env.SIGN_API_KEY || '';
-  const url = 'wss://ws.eulerstream.com?uniqueId=' + encodeURIComponent(rawUsername) + '&apiKey=' + encodeURIComponent(apiKey);
+  const url    = 'wss://ws.eulerstream.com?uniqueId=' + encodeURIComponent(rawUsername) + '&apiKey=' + encodeURIComponent(apiKey);
 
   console.log('🚀 Connecting via EulerStream WS: ' + rawUsername);
   const ws = new WebSocket(url);
   connections[safeUsername] = ws;
 
-  ws.on('open', function() { console.log('✅ Connected: ' + rawUsername); });
-  ws.on('close', function(code, reason) {
-    console.log('⚠️ [' + safeUsername + '] WS closed: ' + code + ' ' + reason);
-    delete connections[safeUsername];
-  });
-  ws.on('error', function(err) {
-    console.error('❌ [' + safeUsername + '] WS error:', err.message);
-    delete connections[safeUsername];
-  });
+  ws.on('open',    function()      { console.log('✅ Connected: ' + rawUsername); });
+  ws.on('close',   function(c, r)  { console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + r); delete connections[safeUsername]; });
+  ws.on('error',   function(e)     { console.error('❌ [' + safeUsername + '] WS error:', e.message); delete connections[safeUsername]; });
 
   ws.on('message', function(raw) {
     try {
-      const msg = JSON.parse(raw);
+      const msg   = JSON.parse(raw);
       const items = msg.messages || [msg];
       items.forEach(function(item) {
         const type = item.type || item.event || '';
         const data = item.data || item;
-        if (type === 'WebcastGiftMessage') {
-          console.log('🎁 FULL GIFT:', JSON.stringify(data));
-          handleGift(safeUsername, data);
-        } else if (type === 'WebcastChatMessage') {
-          handleChat(safeUsername, data);
-        }
+        if (type === 'WebcastGiftMessage')  handleGift(safeUsername, data);
+        else if (type === 'WebcastChatMessage') handleChat(safeUsername, data);
       });
     } catch (e) {
       console.error('❌ Parse error:', e.message);
@@ -221,16 +186,13 @@ app.post('/connect', async function(req, res) {
   if (!rawUsername) return res.status(400).send('Missing username');
 
   const safeUsername = safeKey(rawUsername);
-  if (connections[safeUsername]) {
-    console.log('♻️ Replacing:', rawUsername);
-    disconnectSafe(safeUsername);
-  }
+  if (connections[safeUsername]) { console.log('♻️ Replacing:', rawUsername); disconnectSafe(safeUsername); }
 
   try {
     const ws = connectEuler(safeUsername, rawUsername);
     await new Promise(function(resolve, reject) {
       const t = setTimeout(function() { reject(new Error('Timeout')); }, 10000);
-      ws.once('open', function() { clearTimeout(t); resolve(); });
+      ws.once('open',  function()  { clearTimeout(t); resolve(); });
       ws.once('error', function(e) { clearTimeout(t); reject(e); });
       ws.once('close', function(c) { clearTimeout(t); reject(new Error('Closed: ' + c)); });
     });
@@ -250,16 +212,11 @@ app.post('/disconnect', function(req, res) {
   res.send('Disconnected');
 });
 
-app.get('/health', function(req, res) {
-  res.json({ status: 'ok', connections: Object.keys(connections).length });
-});
-
-app.get('/overlay-password', function(req, res) {
-  res.json({ password: 'rckz2026' });
-});
+app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
+app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
 
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
-process.on('uncaughtException', function(e) { console.error('⚠️ Uncaught:', e && e.message || e); });
+process.on('uncaughtException',  function(e) { console.error('⚠️ Uncaught:',  e && e.message || e); });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() { console.log('🌐 Server running on port ' + PORT); });
