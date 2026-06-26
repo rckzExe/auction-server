@@ -281,10 +281,12 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
   }
 });
 
-    res.send("Connected");
+        res.send("Connected");
 
   } catch (err) {
-    console.error("❌ Failed:", err.message);
+    console.error("❌ FULL ERROR:");
+    console.error(err);
+
     delete connections[safeUsername];
     res.status(500).send("Failed to connect");
   }
