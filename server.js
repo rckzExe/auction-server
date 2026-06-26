@@ -55,14 +55,18 @@ async function handleGift(safeUsername, data) {
     const msgId  = common.msgId || data.msgId;
     if (!msgId) return;
 
-    // repeatEnd is 0 or 1 (not boolean) — only process the final message
-    const repeatEnd = data.repeatEnd;
-    if (repeatEnd === 0 || repeatEnd === false) return;
-
-    // Dedup on msgId
+    // Dedup on msgId first
     if (processed.has(msgId)) return;
     processed.add(msgId);
     setTimeout(function() { processed.delete(msgId); }, 15000);
+
+    // For streak gifts (giftType=1, held down gifts like roses):
+    // EulerStream sends multiple messages with same groupId
+    // Only process when repeatEnd=1 (final count)
+    // For single tap gifts (giftType=2): always process
+    const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
+    const repeatEnd   = data.repeatEnd;
+    if (giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false)) return;
 
     // User info
     const userObj  = data.user || {};
