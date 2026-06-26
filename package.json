@@ -4,12 +4,11 @@
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "postinstall": "node patch-connector.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "firebase-admin": "^11.11.0",
-    "tiktok-live-connector": "1.1.8"
+    "tiktok-live-connector": "^1.1.9"
   }
 }
