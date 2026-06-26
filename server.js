@@ -88,6 +88,9 @@ function connectEuler(safeUsername, rawUsername) {
   ws.on('message', async (raw) => {
     try {
       const msg = JSON.parse(raw);
+      // LOG messages so we can see EulerStream format
+      if (!ws._logCount) ws._logCount = 0;
+      if (ws._logCount < 20) { console.log(`📦 MSG [${safeUsername}]:`, JSON.stringify(msg).slice(0, 400)); ws._logCount++; }
       const event = msg.event || msg.type;
 
       // ── GIFT ──
