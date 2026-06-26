@@ -5,9 +5,6 @@ const admin = require("firebase-admin");
 const app = express();
 app.use(express.json());
 
-// =========================
-// 🔥 FIREBASE
-// =========================
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -19,79 +16,41 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// =========================
-// 🧠 GLOBAL STATE
-// =========================
 const connections = {};
 const processed = new Set();
 const processedChats = new Set();
 const lastStreak = {};
 const giftBuffer = {};
 const vouchCooldown = {};
-
 const FLUSH_DELAY = 250;
 
-// =========================
-// 🔧 SAFE KEY FUNCTION
-// =========================
 function safeKey(str) {
   return str.replace(/[.#$[\]]/g, "_");
 }
 
-// =========================
-// 🧠 BUFFER SYSTEM
-// =========================
 function addToBuffer(owner, user, rawUser, amount, photo) {
-
   const key = `${owner}_${user}`;
-
   if (!giftBuffer[key]) {
-    giftBuffer[key] = {
-      name: rawUser,
-      score: 0,
-      photoUrl: photo || "",
-      timeout: null
-    };
+    giftBuffer[key] = { name: rawUser, score: 0, photoUrl: photo || "", timeout: null };
   }
-
   giftBuffer[key].score += amount;
-
   clearTimeout(giftBuffer[key].timeout);
-
   giftBuffer[key].timeout = setTimeout(async () => {
     const data = giftBuffer[key];
     delete giftBuffer[key];
-
     try {
       const ref = db.ref(`auctions/${owner}/players/${user}`);
-
       await ref.transaction(current => {
-        if (!current) {
-          return {
-            name: data.name,
-            score: data.score,
-            photoUrl: data.photoUrl
-          };
-        }
-
-        return {
-          ...current,
-          score: (current.score || 0) + data.score
-        };
+        if (!current) return { name: data.name, score: data.score, photoUrl: data.photoUrl };
+        return { ...current, score: (current.score || 0) + data.score };
       });
-
       console.log(`✅ [${owner}] ${data.name} +${data.score}`);
-
     } catch (err) {
       console.error("❌ Firebase error:", err);
     }
-
   }, FLUSH_DELAY);
 }
 
-// =========================
-// 🔌 SAFE CONNECT FUNCTION
-// =========================
 async function safeConnect(connection) {
   return Promise.race([
     connection.connect(),
@@ -101,22 +60,12 @@ async function safeConnect(connection) {
   ]);
 }
 
-// =========================
-// 🔌 CONNECT ENDPOINT
-// =========================
 app.post('/connect', async (req, res) => {
-
   const rawUsername = req.body.username;
-  
-
   console.log("📥 /connect hit with:", rawUsername);
-
-  if (!rawUsername) {
-    return res.status(400).send("Missing username");
-  }
+  if (!rawUsername) return res.status(400).send("Missing username");
 
   const safeUsername = safeKey(rawUsername);
-
   if (connections[safeUsername]) {
     console.log("♻️ Replacing existing connection:", rawUsername);
     delete connections[safeUsername];
@@ -124,22 +73,18 @@ app.post('/connect', async (req, res) => {
 
   console.log("🚀 Connecting:", rawUsername);
 
-  const connection = new WebcastPushConnection(rawUsername);
+  const connection = new WebcastPushConnection(rawUsername, {
+    signApiKey: process.env.SIGN_API_KEY
+  });
   connections[safeUsername] = connection;
 
   try {
     await safeConnect(connection);
-
     console.log("✅ Connected:", rawUsername);
 
-    // =========================
-    // 🎁 GIFT HANDLER
-    // =========================
     connection.on('gift', async (data) => {
-
       const id = data.msgId || `${data.userId}-${data.giftId}-${data.timestamp}`;
       if (processed.has(id)) return;
-
       processed.add(id);
       setTimeout(() => processed.delete(id), 5000);
 
@@ -148,138 +93,83 @@ app.post('/connect', async (req, res) => {
 
       const snap = await db.ref(`auctions/${safeUsername}`).once("value");
       const auction = snap.val();
-
       if (!auction || !auction.active) return;
       if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
       let value = 0;
-
       const giftName = (data.giftName || "").toLowerCase();
       const repeat = data.repeatCount || 1;
 
       if (giftName.includes("rose") || giftName.includes("heart me")) {
         value = repeat;
       } else {
-
-        const giftValues = {
-          5655: 5,
-          5760: 30,
-          7934: 100,
-        };
-
+        const giftValues = { 5655: 5, 5760: 30, 7934: 100 };
         let baseValue;
-
         if (Object.prototype.hasOwnProperty.call(giftValues, data.giftId)) {
           baseValue = giftValues[data.giftId];
         } else {
           baseValue = data.diamondCount || 1;
         }
-
         value = baseValue * repeat;
       }
 
       if (data.giftType === 1) {
         if (!data.repeatEnd) return;
-
-        lastStreak[user] = {
-          time: Date.now(),
-          amount: value
-        };
+        lastStreak[user] = { time: Date.now(), amount: value };
       } else {
         const last = lastStreak[user];
-
-        if (
-          last &&
-          value === 1 &&
-          (Date.now() - last.time < 1200)
-        ) {
-          return;
-        }
+        if (last && value === 1 && (Date.now() - last.time < 1200)) return;
       }
 
-      addToBuffer(
-        safeUsername,
-        user,
-        rawUser,
-        value,
-        data.profilePictureUrl || data.user?.profilePictureUrl
-      );
+      addToBuffer(safeUsername, user, rawUser, value,
+        data.profilePictureUrl || data.user?.profilePictureUrl);
     });
 
-    // =========================
-    // ⭐ VOUCH SYSTEM (FIXED)
-    // =========================
     connection.on('chat', async (data) => {
+      const message = (data.comment || "").toLowerCase();
+      const id = data.msgId || `${data.userId}-${data.timestamp}`;
+      if (processedChats.has(id)) return;
+      processedChats.add(id);
+      setTimeout(() => processedChats.delete(id), 5000);
 
-  const message = (data.comment || "").toLowerCase();
-  const id = data.msgId || `${data.userId}-${data.timestamp}`;
+      const rawUser = data.uniqueId || "";
+      const user = safeKey(rawUser);
 
-  if (processedChats.has(id)) return;
-  processedChats.add(id);
-  setTimeout(() => processedChats.delete(id), 5000);
+      try {
+        const snap = await db.ref(`auctions/${safeUsername}`).once("value");
+        const auction = snap.val();
+        if (!auction || !auction.active) return;
 
-  const rawUser = data.uniqueId || "";
-  const user = safeKey(rawUser);
+        const words = auction.vouchWords || [];
+        const triggered = words.some(word =>
+          typeof word === "string" && message.includes(word.toLowerCase())
+        );
+        if (!triggered) return;
 
-  try {
-    const snap = await db.ref(`auctions/${safeUsername}`).once("value");
-    const auction = snap.val();
+        const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
+        const players = playersSnap.val() || {};
+        let top = null;
+        Object.values(players).forEach(p => { if (!top || p.score > top.score) top = p; });
 
-    if (!auction || !auction.active) return;
+        if (!top) return;
+        if (!top.name || !rawUser) return;
+        if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
 
-    const words = auction.vouchWords || [];
+        const key = `${safeUsername}_${user}`;
+        if (vouchCooldown[key]) return;
+        vouchCooldown[key] = true;
+        setTimeout(() => delete vouchCooldown[key], 3000);
 
-    // 🔥 CHECK IF MESSAGE CONTAINS ANY WORD
-    const triggered = words.some(word =>
-  typeof word === "string" && message.includes(word.toLowerCase())
-);
+        if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
 
-    if (!triggered) return;
-
-    // 🏆 GET CURRENT LEADER
-    const playersSnap = await db.ref(`auctions/${safeUsername}/players`).once("value");
-    const players = playersSnap.val() || {};
-
-    let top = null;
-
-    Object.values(players).forEach(p => {
-      if (!top || p.score > top.score) top = p;
+        await db.ref(`users/${safeUsername}/vouches`).transaction(v => (v || 0) + 1);
+        await db.ref(`auctions/${safeUsername}/vouchedUsers/${user}`).set(true);
+        await db.ref(`auctions/${safeUsername}/lastVouch`).set({ user: top.name, time: Date.now() });
+        console.log(`💬 WORD VOUCH from ${top.name}`);
+      } catch (err) {
+        console.error("Vouch error:", err);
+      }
     });
-
-    if (!top) return;
-
-    // ✅ ONLY WINNER CAN TRIGGER
-   if (!top.name || !rawUser) return;
-
-if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
-
-    // ⏱ COOLDOWN
-    const key = `${safeUsername}_${user}`;
-    if (vouchCooldown[key]) return;
-
-    vouchCooldown[key] = true;
-    setTimeout(() => delete vouchCooldown[key], 3000);
-
-   if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
-
-    // ➕ ADD VOUCH
-    await db.ref(`users/${safeUsername}/vouches`)
-      .transaction(v => (v || 0) + 1);
-
-   await db.ref(`auctions/${safeUsername}/vouchedUsers/${user}`).set(true);
-
-    // 💥 TRIGGER OVERLAY
-    await db.ref(`auctions/${safeUsername}/lastVouch`).set({
-  user: top.name,
-  time: Date.now()
-});
-
-    console.log(`💬 WORD VOUCH from ${top.name}`);
-
-  } catch (err) {
-    console.error("Vouch error:", err);
-  }
-});
 
     res.send("Connected");
 
@@ -291,13 +181,16 @@ if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
 });
 
 app.get('/overlay-password', (req, res) => {
-  res.json({
-    password: "rckz2026"
-  });
+  res.json({ password: "rckz2026" });
+});
+
+// Safety net
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught exception:', err?.message || err);
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`🌐 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
