@@ -141,10 +141,12 @@ async function handleGift(safeUsername, data) {
 
     // stronger dedupe
     const id =
-      common.msgId ||
-      data.msgId ||
-      data.messageId ||
-      `${rawUser}_${giftId}_${repeatCount}_${repeatEnd}_${Math.floor(Date.now() / 3000)}`
+  common.msgId ||
+  data.msgId ||
+  data.messageId ||
+  data.eventId ||
+  data.id ||
+  `${rawUser}_${giftId || giftName}_${repeatCount}_${Math.floor(Date.now() / 2)}`;
 
     const dedupeKey = `${safeUsername}_${id}`;
     if (processed.has(dedupeKey)) return;
@@ -293,11 +295,21 @@ function connectEuler(safeUsername, rawUsername) {
       items.forEach(function(item) {
         const type = item.type || item.event || '';
         const data = item.data || item;
-        if (type === 'WebcastGiftMessage') {
-          handleGift(safeUsername, data);
-        } else if (type === 'WebcastChatMessage') {
-          handleChat(safeUsername, data);
-        }
+       if (
+  type === 'WebcastGiftMessage' ||
+  type.toLowerCase().includes('gift')
+) {
+  console.log('🎁 EVENT:', type);
+  console.log('🎁 RAW:', JSON.stringify(data).slice(0, 1500));
+
+  handleGift(safeUsername, data);
+
+} else if (
+  type === 'WebcastChatMessage' ||
+  type.toLowerCase().includes('chat')
+) {
+  handleChat(safeUsername, data);
+}
       });
     } catch (e) {
       console.error('❌ Parse error:', e.message);
