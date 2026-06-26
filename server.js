@@ -50,130 +50,71 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 }
 
 function getPhoto(data) {
-  const u = data.user || data.userInfo || data.sender || {};
-
-  function fromImg(img) {
-    if (!img) return "";
-    if (typeof img === "string") return img;
-    if (Array.isArray(img.urlList)) return img.urlList[0] || "";
-    if (Array.isArray(img.url_list)) return img.url_list[0] || "";
-    if (Array.isArray(img.urls)) return img.urls[0] || "";
-    if (img.url) return img.url;
-    if (img.uri) return img.uri;
-    return "";
+  const u = data.user || {};
+  // Try multiple possible locations
+  if (u.profilePictureUrl) return u.profilePictureUrl;
+  if (u.avatarThumb) {
+    if (typeof u.avatarThumb === 'string') return u.avatarThumb;
+    if (u.avatarThumb.urlList && u.avatarThumb.urlList[0]) return u.avatarThumb.urlList[0];
   }
-
-  return (
-    data.profilePictureUrl ||
-    data.profile_picture_url ||
-    fromImg(data.avatarThumb) ||
-    fromImg(data.avatarMedium) ||
-    fromImg(data.avatarLarge) ||
-    fromImg(u.avatarThumb) ||
-    fromImg(u.avatarMedium) ||
-    fromImg(u.avatarLarge) ||
-    fromImg(u.avatar_thumb) ||
-    fromImg(u.avatar_medium) ||
-    fromImg(u.avatar_large) ||
-    u.profilePictureUrl ||
-    u.profile_picture_url ||
-    ""
-  );
+  if (u.avatarMedium) {
+    if (typeof u.avatarMedium === 'string') return u.avatarMedium;
+    if (u.avatarMedium.urlList && u.avatarMedium.urlList[0]) return u.avatarMedium.urlList[0];
+  }
+  if (u.avatar && u.avatar.urlList && u.avatar.urlList[0]) return u.avatar.urlList[0];
+  return data.profilePictureUrl || '';
 }
 
-async function handleGift(safeUsername, item) {
+async function handleGift(safeUsername, data) {
   try {
-    const data = item.data || item.payload || item.message || item;
-    const common = data.common || item.common || {};
-    const gift = data.gift || data.giftInfo || data.giftDetails || data;
+    // msgId is nested under data.common in EulerStream
+    const common = data.common || {};
+    const msgId = common.msgId || data.msgId;
+    if (!msgId) return;
 
-    const rawUser =
-      data.user?.uniqueId ||
-      data.userInfo?.uniqueId ||
-      data.sender?.uniqueId ||
-      data.uniqueId ||
-      item.user?.uniqueId ||
-      "unknown";
+    // DEDUP — each unique msgId only processed once
+    if (processed.has(msgId)) return;
+    processed.add(msgId);
+    setTimeout(function() { processed.delete(msgId); }, 15000);
 
+    const rawUser = (data.user && data.user.uniqueId) || data.uniqueId || 'unknown';
     const user = safeKey(rawUser);
     const photo = getPhoto(data);
 
-    const giftId = String(
-      data.giftId ||
-      data.gift_id ||
-      gift.id ||
-      gift.giftId ||
-      gift.gift_id ||
-      ""
-    );
-
-    const giftName = String(
-      data.giftName ||
-      data.gift_name ||
-      gift.name ||
-      gift.giftName ||
-      common.describe ||
-      ""
-    ).toLowerCase();
-
-    const repeatCount = Number(
-      data.repeatCount ||
-      data.repeat_count ||
-      gift.repeatCount ||
-      gift.repeat_count ||
-      1
-    );
-
-    const id =
-      common.msgId ||
-      data.msgId ||
-      data.messageId ||
-      data.eventId ||
-      data.id ||
-      `${rawUser}_${giftId || giftName}_${repeatCount}_${Math.floor(Date.now() / 3)}`;
-
-    const dedupeKey = `${safeUsername}_${id}`;
-    if (processed.has(dedupeKey)) return;
-    processed.add(dedupeKey);
-    setTimeout(() => processed.delete(dedupeKey), 60000);
-
-    const snap = await db.ref("auctions/" + safeUsername).once("value");
+    const snap = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
     if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
-    const diamondCount = Number(
-      data.diamondCount ||
-      data.diamond_count ||
-      gift.diamondCount ||
-      gift.diamond_count ||
-      gift.diamonds ||
-      gift.cost ||
-      gift.price ||
-      0
-    );
+    // EulerStream gift fields
+    const gift = data.gift || {};
+    const giftName = (gift.name || data.giftName || common.describe || '').toLowerCase();
+    const repeatCount = data.repeatCount || gift.repeatCount || 1;
+    const repeatEnd = data.repeatEnd || gift.repeatEnd || false;
+    const giftType = data.giftType || gift.type || 0;
+    const diamondCount = gift.diamondCount || data.diamondCount || 0;
 
-    const knownGiftValues = {
-      "5655": 5,
-      "5760": 30,
-      "7934": 100
-    };
+    // Streak gifts (held down) — only count on final message
+    if (giftType === 1 && !repeatEnd) return;
 
     let value = 0;
 
-    if (knownGiftValues[giftId]) {
-      value = knownGiftValues[giftId] * repeatCount;
+    if (giftName.includes('rose')) {
+      // Rose = 1 diamond each
+      value = repeatCount * 1;
     } else if (diamondCount > 0) {
       value = diamondCount * repeatCount;
     } else {
+      // Fallback: count as 1 per gift
       value = repeatCount;
     }
 
-    console.log(`🎁 COUNTED ${rawUser} ${giftName} id=${giftId} x${repeatCount} diamonds=${diamondCount} value=${value}`);
+    if (value <= 0) return;
 
+    console.log('🎁 ' + rawUser + ' sent ' + giftName + ' x' + repeatCount + ' (' + diamondCount + ' diamonds each) = ' + value + ' coins');
     addToBuffer(safeUsername, user, rawUser, value, photo);
   } catch (e) {
-    console.error("❌ Gift error:", e.message);
+    console.error('❌ Gift error:', e.message);
   }
 }
 
@@ -252,47 +193,23 @@ function connectEuler(safeUsername, rawUsername) {
     delete connections[safeUsername];
   });
 
- ws.on('message', function(raw) {
-  try {
-    const msg = JSON.parse(raw);
-    const items = msg.messages || msg.events || msg.data?.messages || [msg];
-
-    items.forEach(function(item) {
-      const eventName = String(
-        item.type ||
-        item.event ||
-        item.method ||
-        item.messageType ||
-        item.name ||
-        item.data?.type ||
-        item.data?.event ||
-        ''
-      ).toLowerCase();
-
-      const data = item.data || item.payload || item.message || item;
-
-      const isGift =
-        eventName.includes('gift') ||
-        data.gift ||
-        data.giftId ||
-        data.giftName ||
-        data.gift_id;
-
-      const isChat =
-        eventName.includes('chat') ||
-        eventName.includes('comment') ||
-        data.comment;
-
-     if (isGift) {
-  handleGift(safeUsername, item);
-} else if (isChat) {
-  handleChat(safeUsername, data);
-}
-    });
-  } catch (e) {
-    console.error('❌ Parse error:', e.message);
-  }
-});
+  ws.on('message', function(raw) {
+    try {
+      const msg = JSON.parse(raw);
+      const items = msg.messages || [msg];
+      items.forEach(function(item) {
+        const type = item.type || item.event || '';
+        const data = item.data || item;
+        if (type === 'WebcastGiftMessage') {
+          handleGift(safeUsername, data);
+        } else if (type === 'WebcastChatMessage') {
+          handleChat(safeUsername, data);
+        }
+      });
+    } catch (e) {
+      console.error('❌ Parse error:', e.message);
+    }
+  });
 
   return ws;
 }
