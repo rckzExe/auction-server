@@ -127,6 +127,23 @@ app.post('/connect', async (req, res) => {
   const connection = new WebcastPushConnection(rawUsername);
   connections[safeUsername] = connection;
 
+connection.on('connected', () => {
+  console.log("🟢 TikTok connected");
+});
+
+connection.on('disconnected', () => {
+  console.log("🔴 TikTok disconnected");
+});
+
+connection.on('error', (err) => {
+  console.log("🔥 TIKTOK ERROR:");
+  console.error(err);
+});
+
+connection.on('streamEnd', () => {
+  console.log("📴 Stream ended");
+});
+
   try {
     await safeConnect(connection);
 
