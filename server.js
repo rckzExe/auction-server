@@ -81,31 +81,33 @@ function getPhoto(data) {
   );
 }
 
-async function handleGift(safeUsername, data) {
+async function handleGift(safeUsername, item) {
   try {
-    const common = data.common || {};
-    const gift = data.gift || data.giftInfo || data.giftDetails || {};
+    const data = item.data || item.payload || item.message || item;
+    const common = data.common || item.common || {};
+    const gift = data.gift || data.giftInfo || data.giftDetails || data;
 
     const rawUser =
       data.user?.uniqueId ||
       data.userInfo?.uniqueId ||
       data.sender?.uniqueId ||
       data.uniqueId ||
+      item.user?.uniqueId ||
       "unknown";
 
     const user = safeKey(rawUser);
     const photo = getPhoto(data);
 
-    const giftId =
+    const giftId = String(
       data.giftId ||
       data.gift_id ||
       gift.id ||
       gift.giftId ||
       gift.gift_id ||
-      gift.diamondId ||
-      "";
+      ""
+    );
 
-    const giftName = (
+    const giftName = String(
       data.giftName ||
       data.gift_name ||
       gift.name ||
@@ -122,38 +124,18 @@ async function handleGift(safeUsername, data) {
       1
     );
 
-    const repeatEnd =
-      data.repeatEnd === true ||
-      data.repeat_end === true ||
-      gift.repeatEnd === true ||
-      gift.repeat_end === true;
-
-    const giftType = Number(
-      data.giftType ||
-      data.gift_type ||
-      gift.type ||
-      gift.giftType ||
-      0
-    );
-
-    // only count streak gifts when streak finishes
-    if (giftType === 1 && !repeatEnd) return;
-
-    // stronger dedupe
     const id =
-  common.msgId ||
-  data.msgId ||
-  data.messageId ||
-  data.eventId ||
-  data.id ||
-  `${rawUser}_${giftId || giftName}_${repeatCount}_${Math.floor(Date.now() / 2)}`;
+      common.msgId ||
+      data.msgId ||
+      data.messageId ||
+      data.eventId ||
+      data.id ||
+      `${rawUser}_${giftId || giftName}_${repeatCount}_${Math.floor(Date.now() / 3)}`;
 
     const dedupeKey = `${safeUsername}_${id}`;
     if (processed.has(dedupeKey)) return;
     processed.add(dedupeKey);
-    setTimeout(function () {
-      processed.delete(dedupeKey);
-    }, 60000);
+    setTimeout(() => processed.delete(dedupeKey), 60000);
 
     const snap = await db.ref("auctions/" + safeUsername).once("value");
     const auction = snap.val();
@@ -172,40 +154,22 @@ async function handleGift(safeUsername, data) {
     );
 
     const knownGiftValues = {
-      5655: 5,
-      5760: 30,
-      7934: 100
+      "5655": 5,
+      "5760": 30,
+      "7934": 100
     };
 
     let value = 0;
 
     if (knownGiftValues[giftId]) {
       value = knownGiftValues[giftId] * repeatCount;
-    } else if (giftName.includes("rose") || giftName.includes("heart me")) {
-      value = repeatCount;
     } else if (diamondCount > 0) {
       value = diamondCount * repeatCount;
     } else {
-      console.log("⚠️ Unknown gift value:", JSON.stringify(data).slice(0, 1000));
       value = repeatCount;
     }
 
-    if (value <= 0) return;
-
-    console.log(
-      "🎁 " +
-        rawUser +
-        " sent " +
-        giftName +
-        " id=" +
-        giftId +
-        " x" +
-        repeatCount +
-        " diamonds=" +
-        diamondCount +
-        " = " +
-        value
-    );
+    console.log(`🎁 COUNTED ${rawUser} ${giftName} id=${giftId} x${repeatCount} diamonds=${diamondCount} value=${value}`);
 
     addToBuffer(safeUsername, user, rawUser, value, photo);
   } catch (e) {
@@ -319,11 +283,11 @@ function connectEuler(safeUsername, rawUsername) {
         eventName.includes('comment') ||
         data.comment;
 
-      if (isGift) {
-        handleGift(safeUsername, data);
-      } else if (isChat) {
-        handleChat(safeUsername, data);
-      }
+     if (isGift) {
+  handleGift(safeUsername, item);
+} else if (isChat) {
+  handleChat(safeUsername, data);
+}
     });
   } catch (e) {
     console.error('❌ Parse error:', e.message);
