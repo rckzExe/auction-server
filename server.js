@@ -15,8 +15,11 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// New API uses TikTokLiveConnection not WebcastPushConnection
-const { TikTokLiveConnection } = require('tiktok-live-connector');
+// v1.2.3 uses WebcastPushConnection + SignConfig for free tier signing
+const { WebcastPushConnection, SignConfig } = require('tiktok-live-connector');
+
+// Set the API key globally before any connection is made
+SignConfig.apiKey = process.env.SIGN_API_KEY;
 
 const connections    = {};
 const processed      = new Set();
@@ -75,10 +78,10 @@ app.post('/connect', async (req, res) => {
 
   let connection;
   try {
-    connection = new TikTokLiveConnection(rawUsername, {
-      signApiKey: process.env.SIGN_API_KEY,
+    connection = new WebcastPushConnection(rawUsername, {
       processInitialData: false,
       enableExtendedGiftInfo: true,
+      requestPollingIntervalMs: 1000,
     });
   } catch (err) {
     console.error("❌ Failed to create connection:", err.message);
@@ -86,6 +89,15 @@ app.post('/connect', async (req, res) => {
   }
 
   connections[safeUsername] = connection;
+
+  connection.on('disconnected', () => {
+    console.log(`⚠️ [${safeUsername}] Disconnected`);
+    delete connections[safeUsername];
+  });
+
+  connection.on('error', (err) => {
+    console.error(`❌ [${safeUsername}] Error:`, err?.message || JSON.stringify(err));
+  });
 
   try {
     await Promise.race([
@@ -103,7 +115,6 @@ app.post('/connect', async (req, res) => {
 
   console.log("✅ Connected:", rawUsername);
 
-  // GIFT HANDLER
   connection.on('gift', async (data) => {
     try {
       if (!data) return;
@@ -148,7 +159,6 @@ app.post('/connect', async (req, res) => {
     }
   });
 
-  // CHAT / VOUCH HANDLER
   connection.on('chat', async (data) => {
     try {
       if (!data) return;
@@ -191,15 +201,6 @@ app.post('/connect', async (req, res) => {
     } catch (err) {
       console.error("❌ Vouch error:", err.message);
     }
-  });
-
-  connection.on('disconnected', () => {
-    console.log(`⚠️ [${safeUsername}] Disconnected`);
-    delete connections[safeUsername];
-  });
-
-  connection.on('error', (err) => {
-    console.error(`❌ [${safeUsername}] Error:`, err?.message || err);
   });
 
   res.send("Connected");
