@@ -182,10 +182,28 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
   });
 
   ws.on('close', function(c, r) {
-    console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + r);
+    var reason = r ? r.toString() : '';
+    console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + reason);
     if (ws._pingInterval) clearInterval(ws._pingInterval);
     delete connections[safeUsername];
-    // Auto-reconnect after 3 seconds if we still have a record of this user
+    // 4404 = user not live — wait for manual reconnect from panel
+    if (c === 4404) {
+      console.log('ℹ️ [' + safeUsername + '] User is not live — stopping reconnect');
+      delete rawUsernames[safeUsername];
+      return;
+    }
+    // 4429 = rate limit hit — stop hammering, wait 60s then retry once
+    if (c === 4429) {
+      console.log('⏳ [' + safeUsername + '] Rate limited — waiting 60s before retry');
+      setTimeout(function() {
+        if (!connections[safeUsername] && rawUsernames[safeUsername]) {
+          console.log('🔄 Rate limit retry: ' + rawUsernames[safeUsername]);
+          connectEuler(safeUsername, rawUsernames[safeUsername], true);
+        }
+      }, 60000);
+      return;
+    }
+    // Auto-reconnect for all other drops (network issues, 1006, etc)
     if (rawUsernames[safeUsername]) {
       console.log('🔄 Auto-reconnecting ' + rawUsername + ' in 3s...');
       setTimeout(function() {
