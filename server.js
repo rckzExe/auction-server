@@ -55,30 +55,22 @@ async function handleGift(safeUsername, data) {
     const msgId  = common.msgId || data.msgId;
     if (!msgId) return;
 
-    // Dedup on msgId first
     if (processed.has(msgId)) return;
     processed.add(msgId);
     setTimeout(function() { processed.delete(msgId); }, 15000);
 
-    // For streak gifts (giftType=1, held down gifts like roses):
-    // EulerStream sends multiple messages with same groupId
-    // Only process when repeatEnd=1 (final count)
-    // For single tap gifts (giftType=2): always process
     const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
     const repeatEnd   = data.repeatEnd;
     if (giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false)) return;
 
-    // User info
     const userObj  = data.user || {};
     const rawUser  = userObj.uniqueId || data.uniqueId || 'unknown';
     const user     = safeKey(rawUser);
 
-    // Profile picture is at data.user.profilePicture.url[0]
     const picObj   = userObj.profilePicture || {};
     const picUrls  = picObj.url || [];
     const photo    = picUrls[0] || '';
 
-    // Gift details are at data.giftDetails
     const details      = data.giftDetails || {};
     const giftName     = (details.giftName || '').toLowerCase();
     const diamondCount = details.diamondCount || 0;
@@ -89,7 +81,6 @@ async function handleGift(safeUsername, data) {
     if (!auction || !auction.active) return;
     if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
-    // Calculate value: diamondCount per gift × repeat count
     const value = (diamondCount > 0 ? diamondCount : 1) * repeatCount;
 
     console.log('🎁 ' + rawUser + ' | ' + giftName + ' x' + repeatCount + ' | ' + diamondCount + ' diamonds each | = ' + value + ' coins');
@@ -108,7 +99,8 @@ async function handleChat(safeUsername, data) {
     processedChats.add(msgId);
     setTimeout(function() { processedChats.delete(msgId); }, 5000);
 
-    const message  = (data.comment || '').toLowerCase();
+    const rawMessage = data.comment || '';
+    const message  = rawMessage.toLowerCase();
     const userObj  = data.user || {};
     const rawUser  = userObj.uniqueId || data.uniqueId || '';
     const user     = safeKey(rawUser);
@@ -116,6 +108,20 @@ async function handleChat(safeUsername, data) {
     const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
+
+    // ── WINNER MESSAGES ──
+    // Remember this user's latest chat message on their OWN player
+    // record. Only written if they're already in the players list
+    // (i.e. they've actually given a gift and are in the running) —
+    // this avoids storing text from randoms who never bid. Because
+    // it's stored per-user on their own record, whoever ends up
+    // winning, only THAT player's own last message is ever shown —
+    // the board never has access to anyone else's, by construction.
+    if (rawMessage && rawUser && auction.players && auction.players[user]) {
+      db.ref('auctions/' + safeUsername + '/players/' + user + '/lastMessage')
+        .set(rawMessage)
+        .catch(function(e) { console.error('❌ lastMessage write failed:', e.message); });
+    }
 
     const words     = auction.vouchWords || [];
     const triggered = words.some(function(w) {
@@ -150,13 +156,11 @@ async function handleChat(safeUsername, data) {
 }
 
 function disconnectSafe(safeUsername) {
-  // Clear rawUsernames first so the close handler doesn't auto-reconnect
   delete rawUsernames[safeUsername];
   try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
 
-// Track raw usernames for reconnect
 const rawUsernames = {};
 
 function connectEuler(safeUsername, rawUsername, isReconnect) {
@@ -173,7 +177,6 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
 
   ws.on('open', function() {
     console.log('✅ Connected: ' + rawUsername);
-    // Send a ping every 30s to keep the connection alive
     ws._pingInterval = setInterval(function() {
       if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
@@ -186,13 +189,11 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
     console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + reason);
     if (ws._pingInterval) clearInterval(ws._pingInterval);
     delete connections[safeUsername];
-    // 4404 = user not live — wait for manual reconnect from panel
     if (c === 4404) {
       console.log('ℹ️ [' + safeUsername + '] User is not live — stopping reconnect');
       delete rawUsernames[safeUsername];
       return;
     }
-    // 4429 = rate limit hit — stop hammering, wait 60s then retry once
     if (c === 4429) {
       console.log('⏳ [' + safeUsername + '] Rate limited — waiting 60s before retry');
       setTimeout(function() {
@@ -203,7 +204,6 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
       }, 60000);
       return;
     }
-    // Auto-reconnect for all other drops (network issues, 1006, etc)
     if (rawUsernames[safeUsername]) {
       console.log('🔄 Auto-reconnecting ' + rawUsername + ' in 3s...');
       setTimeout(function() {
