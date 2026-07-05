@@ -110,17 +110,20 @@ async function handleChat(safeUsername, data) {
     if (!auction || !auction.active) return;
 
     // ── WINNER MESSAGES ──
-    // Remember this user's latest chat message on their OWN player
-    // record. Only written if they're already in the players list
-    // (i.e. they've actually given a gift and are in the running) —
-    // this avoids storing text from randoms who never bid. Because
-    // it's stored per-user on their own record, whoever ends up
-    // winning, only THAT player's own last message is ever shown —
-    // the board never has access to anyone else's, by construction.
+    // Remember this user's latest chat message in a DEDICATED node,
+    // separate from players — players gets wiped on every auction
+    // reset/fresh round, which was wiping this out constantly. This
+    // node is never touched by reset, so it survives across rounds
+    // and always reflects whatever they last actually typed. Only
+    // written if they're already in the players list (i.e. they've
+    // actually given a gift and are in the running), and because it's
+    // stored per-user on their own key, whoever ends up winning, only
+    // THAT player's own last message is ever shown — never anyone
+    // else's.
     if (rawMessage && rawUser && auction.players && auction.players[user]) {
-      db.ref('auctions/' + safeUsername + '/players/' + user + '/lastMessage')
+      db.ref('auctions/' + safeUsername + '/chatMessages/' + user)
         .set(rawMessage)
-        .catch(function(e) { console.error('❌ lastMessage write failed:', e.message); });
+        .catch(function(e) { console.error('❌ chatMessages write failed:', e.message); });
     }
 
     const words     = auction.vouchWords || [];
