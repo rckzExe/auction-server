@@ -1,10 +1,8 @@
 const express   = require('express');
 const admin     = require('firebase-admin');
 const WebSocket = require('ws');
-
 const app = express();
 app.use(express.json());
-
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId:   process.env.FIREBASE_PROJECT_ID,
@@ -14,18 +12,15 @@ admin.initializeApp({
   databaseURL: 'https://auction-app-4e98f-default-rtdb.firebaseio.com'
 });
 const db = admin.database();
-
 const connections    = {};
 const processed      = new Set();
 const processedChats = new Set();
 const giftBuffer     = {};
 const vouchCooldown  = {};
 const FLUSH_DELAY    = 50;
-
 function safeKey(str) {
   return str.replace(/[.#$[\]]/g, '_');
 }
-
 function addToBuffer(owner, user, rawUser, amount, photo) {
   const key = owner + '_' + user;
   if (!giftBuffer[key]) {
@@ -49,19 +44,29 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
   }, FLUSH_DELAY);
 }
 
+// ── STREAK GIFT SAFETY NET ──
+// Streakable gifts (giftType===1, e.g. Rose) send repeated messages with
+// repeatEnd:false while held, then one final repeatEnd:true message when
+// the streak ends. Previously, if that final message never arrived
+// (dropped, or TikTok/EulerStream just doesn't always cleanly close out
+// very quick single taps), NOTHING ever got through — every message for
+// that gift had repeatEnd:false and was silently ignored forever, which
+// is exactly why Rose specifically could just stop working.
+// This tracks the latest count per (user + gift) and, if no proper
+// "streak ended" message shows up within STREAK_TIMEOUT, processes it
+// anyway using the last count actually seen — so a real send is never
+// lost just because TikTok never told us the streak was "done".
+const pendingStreaks = {};
+const STREAK_TIMEOUT = 4000;
+
 async function handleGift(safeUsername, data) {
   try {
     const common = data.common || {};
     const msgId  = common.msgId || data.msgId;
     if (!msgId) return;
-
     if (processed.has(msgId)) return;
     processed.add(msgId);
     setTimeout(function() { processed.delete(msgId); }, 15000);
-
-    const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
-    const repeatEnd   = data.repeatEnd;
-    if (giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false)) return;
 
     const userObj  = data.user || {};
     const rawUser  = userObj.uniqueId || data.uniqueId || 'unknown';
@@ -76,12 +81,65 @@ async function handleGift(safeUsername, data) {
     const diamondCount = details.diamondCount || 0;
     const repeatCount  = data.repeatCount || 1;
 
+    const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
+    const repeatEnd   = data.repeatEnd;
+
     const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
     if (auction.snipeEndTime && Date.now() > auction.snipeEndTime) return;
 
     const value = (diamondCount > 0 ? diamondCount : 1) * repeatCount;
+    const giftFilter = auction.spinRoyaleGiftFilter; // only ever set by Spin Royale's panel.js
+
+    if (giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false)) {
+      // Unchanged, unconditional, exactly as it always was: mid-streak
+      // messages never count directly, for every auction, both products.
+      //
+      // Spin-Royale-only addition layered on top: also arm a fallback
+      // timer, so if the real "streak ended" message never arrives, we
+      // still count it after a few seconds instead of losing it forever.
+      // Gated strictly behind giftFilter, so Auction Board's behavior
+      // here is 100% identical to before this file was ever touched.
+      if (giftFilter && typeof giftFilter.minValue === 'number') {
+        const perGiftValue = diamondCount > 0 ? diamondCount : 1;
+        const streakKey = safeUsername + '_' + user + '_' + (details.giftId || giftName);
+        if (pendingStreaks[streakKey]) clearTimeout(pendingStreaks[streakKey].timeout);
+        pendingStreaks[streakKey] = {
+          timeout: setTimeout(function() {
+            delete pendingStreaks[streakKey];
+            if (perGiftValue < giftFilter.minValue) return;
+            console.log('⏱️ [SpinRoyale] streak end never arrived for ' + rawUser + ' | ' + giftName + ' — using last seen count (' + value + ' coins) instead of dropping it');
+            addToBuffer(safeUsername, user, rawUser, value, photo);
+          }, STREAK_TIMEOUT)
+        };
+      }
+      return;
+    }
+
+    if (giftFilter && giftTypeVal === 1) {
+      const streakKey = safeUsername + '_' + user + '_' + (details.giftId || giftName);
+      if (pendingStreaks[streakKey]) {
+        clearTimeout(pendingStreaks[streakKey].timeout);
+        delete pendingStreaks[streakKey];
+      }
+    }
+
+    // ── SPIN ROYALE GIFT FILTER ──
+    // Only ever runs when spinRoyaleGiftFilter exists — a field Auction
+    // Board never writes or reads, so this is always skipped entirely
+    // for Auction Board auctions.
+    if (giftFilter && typeof giftFilter.minValue === 'number') {
+      const perGiftValue = diamondCount > 0 ? diamondCount : 1;
+      // Only counts if a single instance of this gift is worth at least
+      // as much as the configured minimum (e.g. Rose selected -> Rose or
+      // anything pricier counts, cheaper gifts don't). Bigger gifts add
+      // their full, larger value — that's what makes them worth more.
+      if (perGiftValue < giftFilter.minValue) {
+        console.log('🚫 [SpinRoyale] ' + rawUser + '\'s ' + giftName + ' (' + perGiftValue + ') is below the required ' + giftFilter.minValue + ' — not counted');
+        return;
+      }
+    }
 
     console.log('🎁 ' + rawUser + ' | ' + giftName + ' x' + repeatCount + ' | ' + diamondCount + ' diamonds each | = ' + value + ' coins');
     addToBuffer(safeUsername, user, rawUser, value, photo);
@@ -89,7 +147,6 @@ async function handleGift(safeUsername, data) {
     console.error('❌ Gift error:', e.message);
   }
 }
-
 async function handleChat(safeUsername, data) {
   try {
     const common = data.common || {};
@@ -98,57 +155,37 @@ async function handleChat(safeUsername, data) {
     if (processedChats.has(msgId)) return;
     processedChats.add(msgId);
     setTimeout(function() { processedChats.delete(msgId); }, 5000);
-
     const rawMessage = data.comment || '';
     const message  = rawMessage.toLowerCase();
     const userObj  = data.user || {};
     const rawUser  = userObj.uniqueId || data.uniqueId || '';
     const user     = safeKey(rawUser);
-
     const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
     if (!auction || !auction.active) return;
-
-    // ── WINNER MESSAGES ──
-    // Remember this user's latest chat message in a DEDICATED node,
-    // separate from players — players gets wiped on every auction
-    // reset/fresh round, which was wiping this out constantly. This
-    // node is never touched by reset, so it survives across rounds
-    // and always reflects whatever they last actually typed. Only
-    // written if they're already in the players list (i.e. they've
-    // actually given a gift and are in the running), and because it's
-    // stored per-user on their own key, whoever ends up winning, only
-    // THAT player's own last message is ever shown — never anyone
-    // else's.
     if (rawMessage && rawUser && auction.players && auction.players[user]) {
       db.ref('auctions/' + safeUsername + '/chatMessages/' + user)
         .set(rawMessage)
         .catch(function(e) { console.error('❌ chatMessages write failed:', e.message); });
     }
-
     const words     = auction.vouchWords || [];
     const triggered = words.some(function(w) {
       return typeof w === 'string' && message.includes(w.toLowerCase());
     });
     if (!triggered) return;
-
     const playersSnap = await db.ref('auctions/' + safeUsername + '/players').once('value');
     const players     = playersSnap.val() || {};
     let top = null;
     Object.values(players).forEach(function(p) {
       if (!top || p.score > top.score) top = p;
     });
-
     if (!top || !top.name || !rawUser) return;
     if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
-
     const coolKey = safeUsername + '_' + user;
     if (vouchCooldown[coolKey]) return;
     vouchCooldown[coolKey] = true;
     setTimeout(function() { delete vouchCooldown[coolKey]; }, 3000);
-
     if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
-
     await db.ref('users/' + safeUsername + '/vouches').transaction(function(v) { return (v || 0) + 1; });
     await db.ref('auctions/' + safeUsername + '/vouchedUsers/' + user).set(true);
     await db.ref('auctions/' + safeUsername + '/lastVouch').set({ user: top.name, time: Date.now() });
@@ -157,27 +194,20 @@ async function handleChat(safeUsername, data) {
     console.error('❌ Chat error:', e.message);
   }
 }
-
 function disconnectSafe(safeUsername) {
   delete rawUsernames[safeUsername];
   try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
-
 const rawUsernames = {};
-
 function connectEuler(safeUsername, rawUsername, isReconnect) {
   const apiKey = process.env.SIGN_API_KEY || '';
   const url    = 'wss://ws.eulerstream.com?uniqueId=' + encodeURIComponent(rawUsername) + '&apiKey=' + encodeURIComponent(apiKey);
-
   rawUsernames[safeUsername] = rawUsername;
-
   if (!isReconnect) console.log('🚀 Connecting via EulerStream WS: ' + rawUsername);
   else console.log('♻️ Reconnecting: ' + rawUsername);
-
   const ws = new WebSocket(url);
   connections[safeUsername] = ws;
-
   ws.on('open', function() {
     console.log('✅ Connected: ' + rawUsername);
     ws._pingInterval = setInterval(function() {
@@ -186,7 +216,6 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
       }
     }, 30000);
   });
-
   ws.on('close', function(c, r) {
     var reason = r ? r.toString() : '';
     console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + reason);
@@ -194,6 +223,11 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
     delete connections[safeUsername];
     if (c === 4404) {
       console.log('ℹ️ [' + safeUsername + '] User is not live — stopping reconnect');
+      delete rawUsernames[safeUsername];
+      return;
+    }
+    if (c === 4400) {
+      console.log('❌ [' + safeUsername + '] Invalid TikTok username (uniqueId rejected) — stopping reconnect, this can never succeed by retrying');
       delete rawUsernames[safeUsername];
       return;
     }
@@ -216,12 +250,10 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
       }, 3000);
     }
   });
-
   ws.on('error', function(e) {
     console.error('❌ [' + safeUsername + '] WS error:', e.message);
     delete connections[safeUsername];
   });
-
   ws.on('message', function(raw) {
     try {
       const msg   = JSON.parse(raw);
@@ -236,18 +268,14 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
       console.error('❌ Parse error:', e.message);
     }
   });
-
   return ws;
 }
-
 app.post('/connect', async function(req, res) {
   const rawUsername = req.body.username;
   console.log('📥 /connect hit with:', rawUsername);
   if (!rawUsername) return res.status(400).send('Missing username');
-
   const safeUsername = safeKey(rawUsername);
   if (connections[safeUsername]) { console.log('♻️ Replacing:', rawUsername); disconnectSafe(safeUsername); }
-
   try {
     const ws = connectEuler(safeUsername, rawUsername);
     await new Promise(function(resolve, reject) {
@@ -263,7 +291,6 @@ app.post('/connect', async function(req, res) {
     res.status(500).send('Failed: ' + err.message);
   }
 });
-
 app.post('/disconnect', function(req, res) {
   const rawUsername = req.body.username;
   if (!rawUsername) return res.status(400).send('Missing username');
@@ -271,12 +298,9 @@ app.post('/disconnect', function(req, res) {
   console.log('⛔ Disconnected:', rawUsername);
   res.send('Disconnected');
 });
-
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
 app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
-
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
 process.on('uncaughtException',  function(e) { console.error('⚠️ Uncaught:',  e && e.message || e); });
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() { console.log('🌐 Server running on port ' + PORT); });
