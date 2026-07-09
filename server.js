@@ -1,6 +1,7 @@
 const express   = require('express');
 const admin     = require('firebase-admin');
 const WebSocket = require('ws');
+const crypto    = require('crypto');
 const app = express();
 app.use(express.json());
 admin.initializeApp({
@@ -298,6 +299,72 @@ app.post('/disconnect', function(req, res) {
   console.log('⛔ Disconnected:', rawUsername);
   res.send('Disconnected');
 });
+
+// ══════════════════════════════════════════════════════════════
+// 🔐 AUTH TOKEN ENDPOINT (NEW)
+// ══════════════════════════════════════════════════════════════
+// Mints a Firebase login token whose identity IS a customer's TikTok
+// username — but only after independently re-checking their license
+// against Firebase itself (match, not expired, not revoked). This is
+// what lets the database rules require auth.uid === $owner, so only
+// someone with a genuinely valid, non-revoked license can write to
+// that specific board. Uses the same `admin`/`db` already set up
+// above — no extra credentials needed.
+const AUTH_SECRET = "my_super_secret_key"; // must match main.js / generate.js exactly
+
+app.post('/auth-token', async function(req, res) {
+  try {
+    const { key, expiry, hwid, tiktok, signature, requestUser } = req.body || {};
+
+    if (!key || !expiry || !hwid || !Array.isArray(tiktok) || !signature || !requestUser) {
+      return res.status(400).json({ error: "Missing or malformed license fields" });
+    }
+
+    const expectedSig = crypto
+      .createHmac('sha256', AUTH_SECRET)
+      .update(key + '|' + expiry + '|' + hwid + '|' + JSON.stringify(tiktok))
+      .digest('hex');
+    if (expectedSig !== signature) {
+      return res.status(403).json({ error: "Invalid license signature" });
+    }
+
+    if (new Date() > new Date(expiry)) {
+      return res.status(403).json({ error: "License expired" });
+    }
+
+    const allowed = tiktok.map(function(u) { return safeKey(String(u).toLowerCase()); });
+    const reqKey = safeKey(String(requestUser).toLowerCase());
+    if (allowed.indexOf(reqKey) === -1) {
+      return res.status(403).json({ error: "That TikTok username isn't on this license" });
+    }
+
+    const firebaseKey = key.replace(/-/g, "_");
+    const licenseSnap = await db.ref('licenses/' + firebaseKey).once('value');
+    const revokedSnap = await db.ref('master/revoked/' + firebaseKey).once('value');
+
+    const licenseData = licenseSnap.val();
+    if (!licenseData) {
+      return res.status(403).json({ error: "License not found" });
+    }
+    if (revokedSnap.exists()) {
+      return res.status(403).json({ error: "License has been revoked" });
+    }
+    if (licenseData.hwid !== hwid) {
+      return res.status(403).json({ error: "HWID mismatch" });
+    }
+    if (licenseData.expiresAt && Date.now() > licenseData.expiresAt) {
+      return res.status(403).json({ error: "License expired" });
+    }
+
+    const token = await admin.auth().createCustomToken(reqKey);
+    return res.json({ token: token, owner: reqKey });
+
+  } catch (err) {
+    console.error("auth-token error:", err.message);
+    return res.status(500).json({ error: "Internal error" });
+  }
+});
+
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
 app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
