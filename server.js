@@ -4,6 +4,20 @@ const WebSocket = require('ws');
 const crypto    = require('crypto');
 const app = express();
 app.use(express.json());
+
+// Your app's windows load as file:// pages, and browsers block
+// cross-origin fetch() calls by default unless the server explicitly
+// allows it. Without this, EVERY request to /auth-token from
+// admin.html/index.html fails silently before it even reaches the
+// code above — which is exactly what "Connect does nothing, no
+// popup, board frozen" looks like from the app's side.
+app.use(function(req, res, next) {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId:   process.env.FIREBASE_PROJECT_ID,
