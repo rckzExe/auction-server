@@ -379,6 +379,118 @@ app.post('/auth-token', async function(req, res) {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// 🔐 ADMIN TOKEN ENDPOINT (for Customer Control — gift overlay)
+// ══════════════════════════════════════════════════════════════
+// Customer Control (customer-control.html) is a plain browser page —
+// it can't hold a service-account key like an Electron app can. This
+// mints a Firebase login token with a fixed, special identity instead,
+// but ONLY to whoever knows ADMIN_PANEL_PASSWORD below. The database
+// rules recognize that exact identity as admin-only access for
+// giftCustomers/giftGlobalCommand — nobody who doesn't know this
+// password can ever get a token that matches it.
+//
+// CHANGE THIS to your own private value before deploying — this exact
+// string is your admin panel's password from now on.
+const ADMIN_PANEL_PASSWORD = "change_this_to_your_own_secret";
+const ADMIN_UID = "rckz_master_admin";
+
+app.post('/admin-token', async function(req, res) {
+  try {
+    const { password } = req.body || {};
+    if (!password || password !== ADMIN_PANEL_PASSWORD) {
+      return res.status(403).json({ error: "Incorrect admin password" });
+    }
+    const token = await admin.auth().createCustomToken(ADMIN_UID);
+    return res.json({ token: token });
+  } catch (err) {
+    console.error("admin-token error:", err.message);
+    return res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// 🔐 SPIN ROYALE AUTH TOKEN ENDPOINT
+// ══════════════════════════════════════════════════════════════
+// Spin Royale (panel.js) has its own separate, older license system —
+// different secret, different fields (customer/expiresAt/sig instead
+// of key/hwid/tiktok) — but it writes to the SAME auctions/{owner}
+// node the main auction app does, keyed by TikTok username. This
+// mints a token the exact same way the main app's /auth-token does,
+// just checking Spin Royale's license format/secret instead, so
+// auctions/{owner} rules work identically for both apps with no
+// changes to the rules themselves.
+//
+// Must match panel.js / license-generator.html exactly.
+const SPIN_ROYALE_LICENSE_SECRET = "RCKZ-SR-9f3k2m8x7q1z5w0e6t4y2u8i3o1p9a7s5d3f1g7h9j2k";
+
+function spinRoyaleLicenseSign(payload) {
+  const combined = SPIN_ROYALE_LICENSE_SECRET + "::" + payload + "::" + SPIN_ROYALE_LICENSE_SECRET;
+  let hashA = 0x811c9dc5;
+  for (let i = 0; i < combined.length; i++) {
+    hashA ^= combined.charCodeAt(i);
+    hashA = Math.imul(hashA, 0x01000193) >>> 0;
+  }
+  let hashB = 0x9e3779b9;
+  for (let i = combined.length - 1; i >= 0; i--) {
+    hashB ^= combined.charCodeAt(i);
+    hashB = Math.imul(hashB, 0x85ebca6b) >>> 0;
+  }
+  return hashA.toString(16).padStart(8, "0") + hashB.toString(16).padStart(8, "0");
+}
+
+// Deliberately NOT lowercased — matches firebaseSafeUsername() in
+// panel.js exactly, which also doesn't lowercase. Adding a lowercase
+// step here that panel.js doesn't have would make the uid this mints
+// silently stop matching the key panel.js actually writes to.
+function spinRoyaleSafeUsername(str) {
+  return String(str || "").replace(/[.#$[\]]/g, "_");
+}
+
+function sanitizeFirebaseKey(str) {
+  return String(str || "").replace(/[.#$[\]\/\s]/g, "_");
+}
+
+app.post('/spin-royale-auth-token', async function(req, res) {
+  try {
+    const { license, targetUsername } = req.body || {};
+    if (!license || !license.customer || !license.expiresAt || !license.sig || !targetUsername) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    const expectedSig = spinRoyaleLicenseSign(license.customer + "|" + license.expiresAt);
+    if (expectedSig !== license.sig) {
+      return res.status(403).json({ error: "Invalid license signature" });
+    }
+
+    const expiresAt = new Date(license.expiresAt).getTime();
+    if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) {
+      return res.status(403).json({ error: "License expired" });
+    }
+
+    // Cross-check against Firebase — the part a hand-edited local
+    // license can't fake, since it has to genuinely exist and not be
+    // banned in your actual database.
+    const key = sanitizeFirebaseKey(license.customer) + "_" + license.sig;
+    const snap = await db.ref('licenses/' + key).once('value');
+    const stored = snap.val();
+    if (!stored) {
+      return res.status(403).json({ error: "License not found" });
+    }
+    if (stored.banned) {
+      return res.status(403).json({ error: "This license has been banned: " + (stored.banReason || "no reason given") });
+    }
+
+    const ownerUid = spinRoyaleSafeUsername(targetUsername);
+    const token = await admin.auth().createCustomToken(ownerUid);
+    return res.json({ token: token, owner: ownerUid });
+
+  } catch (err) {
+    console.error("spin-royale-auth-token error:", err.message);
+    return res.status(500).json({ error: "Internal error" });
+  }
+});
+
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
 app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
