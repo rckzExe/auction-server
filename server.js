@@ -27,6 +27,47 @@ admin.initializeApp({
   databaseURL: 'https://auction-app-4e98f-default-rtdb.firebaseio.com'
 });
 const db = admin.database();
+
+// ══════════════════════════════════════════════════════════════
+// 🔐 MODERATOR TOKEN ENDPOINT
+// ══════════════════════════════════════════════════════════════
+// Checks a passcode against master/moderators server-side (the full
+// list is never sent to the client) and mints a Firebase custom token
+// scoped to that exact moderator's own uid (their modId) if it's a
+// valid, non-terminated match.
+app.post('/moderator-token', async function(req, res) {
+  try {
+    const { passcode } = req.body || {};
+    if (!passcode) {
+      return res.status(400).json({ error: 'Missing passcode' });
+    }
+
+    const snap = await db.ref('master/moderators').once('value');
+    const moderators = snap.val() || {};
+
+    const match = Object.entries(moderators).find(function(e) {
+      return e[1] && e[1].passcode === passcode;
+    });
+
+    if (!match) {
+      return res.status(403).json({ error: 'Incorrect password' });
+    }
+
+    const [modId, modData] = match;
+
+    if (modData.terminated) {
+      return res.status(403).json({ error: 'Your access has been terminated' });
+    }
+
+    const token = await admin.auth().createCustomToken(modId);
+    return res.json({ token: token, modId: modId });
+
+  } catch (err) {
+    console.error('moderator-token error:', err.message);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
 const connections    = {};
 const processed      = new Set();
 const processedChats = new Set();
@@ -324,7 +365,11 @@ app.post('/disconnect', function(req, res) {
 // someone with a genuinely valid, non-revoked license can write to
 // that specific board. Uses the same `admin`/`db` already set up
 // above — no extra credentials needed.
-const AUTH_SECRET = "my_super_secret_key"; // must match main.js / generate.js exactly
+//
+// AUTH_SECRET now comes from Railway's environment variables instead
+// of being hardcoded here. Whatever generates your licenses
+// (main.js / generate.js) needs to sign with this exact same value.
+const AUTH_SECRET = process.env.AUTH_SECRET;
 
 app.post('/auth-token', async function(req, res) {
   try {
@@ -390,10 +435,15 @@ app.post('/auth-token', async function(req, res) {
 // giftCustomers/giftGlobalCommand — nobody who doesn't know this
 // password can ever get a token that matches it.
 //
-// CHANGE THIS to your own private value before deploying — this exact
-// string is your admin panel's password from now on.
-const ADMIN_PANEL_PASSWORD = "change_this_to_your_own_secret";
+// ADMIN_PANEL_PASSWORD now comes from Railway's environment variables
+// instead of being a hardcoded placeholder string in source.
+const ADMIN_PANEL_PASSWORD = process.env.ADMIN_PANEL_PASSWORD;
 const ADMIN_UID = "rckz_master_admin";
+
+if (!AUTH_SECRET || !ADMIN_PANEL_PASSWORD) {
+  console.error('❌ Missing required env vars: AUTH_SECRET and/or ADMIN_PANEL_PASSWORD. Set them in Railway → your service → Variables, then redeploy.');
+  process.exit(1);
+}
 
 app.post('/admin-token', async function(req, res) {
   try {
