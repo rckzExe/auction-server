@@ -366,10 +366,7 @@ app.post('/disconnect', function(req, res) {
 // that specific board. Uses the same `admin`/`db` already set up
 // above — no extra credentials needed.
 //
-// AUTH_SECRET now comes from Railway's environment variables instead
-// of being hardcoded here. Whatever generates your licenses
-// (main.js / generate.js) needs to sign with this exact same value.
-const AUTH_SECRET = process.env.AUTH_SECRET;
+const AUTH_SECRET = "my_super_secret_key"; // must match main.js / generate.js exactly
 
 app.post('/auth-token', async function(req, res) {
   try {
@@ -435,15 +432,8 @@ app.post('/auth-token', async function(req, res) {
 // giftCustomers/giftGlobalCommand — nobody who doesn't know this
 // password can ever get a token that matches it.
 //
-// ADMIN_PANEL_PASSWORD now comes from Railway's environment variables
-// instead of being a hardcoded placeholder string in source.
-const ADMIN_PANEL_PASSWORD = process.env.ADMIN_PANEL_PASSWORD;
+const ADMIN_PANEL_PASSWORD = "change_this_to_your_own_secret";
 const ADMIN_UID = "rckz_master_admin";
-
-if (!AUTH_SECRET || !ADMIN_PANEL_PASSWORD) {
-  console.error('❌ Missing required env vars: AUTH_SECRET and/or ADMIN_PANEL_PASSWORD. Set them in Railway → your service → Variables, then redeploy.');
-  process.exit(1);
-}
 
 app.post('/admin-token', async function(req, res) {
   try {
