@@ -229,14 +229,42 @@ async function handleChat(safeUsername, data) {
       return typeof w === 'string' && message.includes(w.toLowerCase());
     });
     if (!triggered) return;
-    const playersSnap = await db.ref('auctions/' + safeUsername + '/players').once('value');
-    const players     = playersSnap.val() || {};
-    let top = null;
-    Object.values(players).forEach(function(p) {
-      if (!top || p.score > top.score) top = p;
-    });
-    if (!top || !top.name || !rawUser) return;
-    if (top.name.toLowerCase() !== rawUser.toLowerCase()) return;
+
+    // ── WHO CAN VOUCH ──
+    // Auction Board (unchanged): whoever currently has the highest
+    // score is the one whose vouch counts — that's literally the
+    // leading bidder, so "top scorer" and "the person this matters
+    // for" are the same thing there.
+    //
+    // Spin Royale addition: elimination games don't work that way —
+    // the highest scorer isn't necessarily who's left standing. When
+    // `spinRoyaleWinner` is present on the auction (only ever written
+    // by Spin Royale's panel.js, right when the board declares an
+    // actual champion), ONLY that exact person's vouch word counts.
+    // If Locked Entries / a round is in progress and no winner has
+    // been declared yet, `spinRoyaleWinner` is null and nobody can
+    // vouch yet — matching "only the winner" literally, not "only
+    // the current leader".
+    const isSpinRoyaleAuction = Object.prototype.hasOwnProperty.call(auction, 'spinRoyaleWinner')
+      || Object.prototype.hasOwnProperty.call(auction, 'spinRoyaleGiftFilter');
+
+    let matchName = null;
+
+    if (isSpinRoyaleAuction) {
+      matchName = auction.spinRoyaleWinner || null;
+    } else {
+      const playersSnap = await db.ref('auctions/' + safeUsername + '/players').once('value');
+      const players     = playersSnap.val() || {};
+      let top = null;
+      Object.values(players).forEach(function(p) {
+        if (!top || p.score > top.score) top = p;
+      });
+      matchName = top && top.name;
+    }
+
+    if (!matchName || !rawUser) return;
+    if (matchName.toLowerCase() !== rawUser.toLowerCase()) return;
+
     const coolKey = safeUsername + '_' + user;
     if (vouchCooldown[coolKey]) return;
     vouchCooldown[coolKey] = true;
@@ -244,8 +272,8 @@ async function handleChat(safeUsername, data) {
     if (auction.vouchedUsers && auction.vouchedUsers[user]) return;
     await db.ref('users/' + safeUsername + '/vouches').transaction(function(v) { return (v || 0) + 1; });
     await db.ref('auctions/' + safeUsername + '/vouchedUsers/' + user).set(true);
-    await db.ref('auctions/' + safeUsername + '/lastVouch').set({ user: top.name, time: Date.now() });
-    console.log('💬 WORD VOUCH from ' + top.name);
+    await db.ref('auctions/' + safeUsername + '/lastVouch').set({ user: matchName, time: Date.now() });
+    console.log('💬 WORD VOUCH from ' + matchName);
   } catch (e) {
     console.error('❌ Chat error:', e.message);
   }
