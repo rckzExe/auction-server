@@ -559,6 +559,35 @@ app.post('/spin-royale-auth-token', async function(req, res) {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// 🔎 STATUS ENDPOINT
+// ══════════════════════════════════════════════════════════════
+// /connect only ever reports the result of the INITIAL handshake —
+// it says nothing about what happens after (stream ends, EulerStream
+// drops it, TikTok says the user isn't live, etc). Once that happens,
+// `connections[safeUsername]` gets deleted and — if the close code
+// was 4404/4400 — `rawUsernames[safeUsername]` gets deleted too,
+// meaning the server has fully given up. Nothing was ever telling the
+// panel any of this, so "Connected" could sit there indefinitely
+// after the server had already stopped listening entirely. The panel
+// polls this endpoint so it can show the truth instead.
+app.get('/status', function(req, res) {
+  const rawUsername = req.query.username;
+  if (!rawUsername) return res.status(400).json({ error: 'Missing username' });
+  const safeUsername = safeKey(rawUsername);
+
+  const ws = connections[safeUsername];
+  const isOpen = !!(ws && ws.readyState === WebSocket.OPEN);
+  const isTrying = !!rawUsernames[safeUsername];
+
+  let state;
+  if (isOpen) state = 'connected';
+  else if (isTrying) state = 'reconnecting';
+  else state = 'stopped'; // server gave up — user likely isn't live anymore
+
+  res.json({ state: state, username: rawUsername });
+});
+
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
 app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
