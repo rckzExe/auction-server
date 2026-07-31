@@ -115,6 +115,24 @@ function addToBuffer(owner, user, rawUser, amount, photo) {
 const pendingStreaks = {};
 const STREAK_TIMEOUT = 4000;
 
+// Guards against exactly this double-count: the fallback timer AND a
+// genuinely-arriving repeatEnd:true message could BOTH end up calling
+// addToBuffer for the same streak — previously nothing stopped that.
+// Whichever one finalizes the streak first now "claims" it for a
+// short window, so the other is a no-op instead of a second add.
+// Scoped only inside the giftFilter-gated (Spin Royale) branches
+// below, so Auction Board — which never arms this fallback timer at
+// all — is completely untouched.
+const finalizedStreaks = new Set();
+const FINALIZE_TTL = STREAK_TIMEOUT + 2000;
+
+function claimStreak(streakKey) {
+  if (finalizedStreaks.has(streakKey)) return false;
+  finalizedStreaks.add(streakKey);
+  setTimeout(function() { finalizedStreaks.delete(streakKey); }, FINALIZE_TTL);
+  return true;
+}
+
 async function handleGift(safeUsername, data) {
   try {
     const common = data.common || {};
@@ -147,6 +165,7 @@ async function handleGift(safeUsername, data) {
 
     const value = (diamondCount > 0 ? diamondCount : 1) * repeatCount;
     const giftFilter = auction.spinRoyaleGiftFilter; // only ever set by Spin Royale's panel.js
+    const streakKey = safeUsername + '_' + user + '_' + (details.giftId || giftName);
 
     if (giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false)) {
       // Unchanged, unconditional, exactly as it always was: mid-streak
@@ -159,12 +178,14 @@ async function handleGift(safeUsername, data) {
       // here is 100% identical to before this file was ever touched.
       if (giftFilter && typeof giftFilter.minValue === 'number') {
         const perGiftValue = diamondCount > 0 ? diamondCount : 1;
-        const streakKey = safeUsername + '_' + user + '_' + (details.giftId || giftName);
         if (pendingStreaks[streakKey]) clearTimeout(pendingStreaks[streakKey].timeout);
         pendingStreaks[streakKey] = {
           timeout: setTimeout(function() {
             delete pendingStreaks[streakKey];
             if (perGiftValue < giftFilter.minValue) return;
+            // If the real repeatEnd:true message already showed up and
+            // claimed this streak in the meantime, don't add it again.
+            if (!claimStreak(streakKey)) return;
             console.log('⏱️ [SpinRoyale] streak end never arrived for ' + rawUser + ' | ' + giftName + ' — using last seen count (' + value + ' coins) instead of dropping it');
             addToBuffer(safeUsername, user, rawUser, value, photo);
           }, STREAK_TIMEOUT)
@@ -174,10 +195,16 @@ async function handleGift(safeUsername, data) {
     }
 
     if (giftFilter && giftTypeVal === 1) {
-      const streakKey = safeUsername + '_' + user + '_' + (details.giftId || giftName);
       if (pendingStreaks[streakKey]) {
         clearTimeout(pendingStreaks[streakKey].timeout);
         delete pendingStreaks[streakKey];
+      }
+      // Same guard from the other direction: if the fallback timer
+      // already fired and counted this exact streak (because this
+      // "real" end message arrived late), skip counting it twice.
+      if (!claimStreak(streakKey)) {
+        console.log('🚫 [SpinRoyale] duplicate/late streak-end for ' + rawUser + ' | ' + giftName + ' — already counted, skipping');
+        return;
       }
     }
 
