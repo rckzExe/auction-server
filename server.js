@@ -305,8 +305,67 @@ async function handleChat(safeUsername, data) {
     console.error('❌ Chat error:', e.message);
   }
 }
+
+// ══════════════════════════════════════════════════════════════
+// 🔁 RECONNECT BACKOFF (the actual fix for the EulerStream quota burn)
+// ══════════════════════════════════════════════════════════════
+// The old code retried EVERY non-4404/4400/4429 close after a flat
+// 3 seconds, forever, with no cap. Every reconnect attempt is a
+// request against your EulerStream quota. If the connection was ever
+// bouncing for any other reason (bad/expired API key, brief
+// EulerStream hiccup, network blip, etc.) this turned into a tight
+// loop: 3s retry -> immediate close -> 3s retry -> ... -> 20
+// requests/minute -> your 2,500/day quota gone in under 3 hours,
+// which is exactly the "getting spammed" symptom.
+//
+// Fix: track consecutive failures per streamer, back off
+// exponentially (3s, 6s, 12s, 24s... capped at 2 minutes), and after
+// MAX_RECONNECT_ATTEMPTS give up entirely and log it instead of
+// retrying forever. Counter resets to 0 the moment a connection
+// actually opens successfully, so a normally-stable stream is
+// completely unaffected — this only kicks in when something is
+// genuinely, repeatedly failing.
+const reconnectAttempts = {};   // safeUsername -> consecutive failure count
+const reconnectTimers   = {};   // safeUsername -> pending setTimeout handle
+const BASE_RECONNECT_DELAY = 3000;
+const MAX_RECONNECT_DELAY  = 120000;
+const MAX_RECONNECT_ATTEMPTS = 10;
+
+function clearReconnectTimer(safeUsername) {
+  if (reconnectTimers[safeUsername]) {
+    clearTimeout(reconnectTimers[safeUsername]);
+    delete reconnectTimers[safeUsername];
+  }
+}
+
+function scheduleReconnect(safeUsername, rawUsername) {
+  const attempts = reconnectAttempts[safeUsername] || 0;
+
+  if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.error('🛑 [' + safeUsername + '] Giving up after ' + attempts + ' failed reconnect attempts in a row — stopping to protect your EulerStream quota. Call /connect again manually once the issue is fixed.');
+    delete rawUsernames[safeUsername];
+    delete reconnectAttempts[safeUsername];
+    clearReconnectTimer(safeUsername);
+    return;
+  }
+
+  const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, attempts), MAX_RECONNECT_DELAY);
+  reconnectAttempts[safeUsername] = attempts + 1;
+  console.log('🔄 [' + safeUsername + '] Reconnecting ' + rawUsername + ' in ' + Math.round(delay / 1000) + 's (attempt ' + (attempts + 1) + '/' + MAX_RECONNECT_ATTEMPTS + ')...');
+
+  clearReconnectTimer(safeUsername);
+  reconnectTimers[safeUsername] = setTimeout(function() {
+    delete reconnectTimers[safeUsername];
+    if (!connections[safeUsername] && rawUsernames[safeUsername]) {
+      connectEuler(safeUsername, rawUsernames[safeUsername], true);
+    }
+  }, delay);
+}
+
 function disconnectSafe(safeUsername) {
   delete rawUsernames[safeUsername];
+  delete reconnectAttempts[safeUsername];
+  clearReconnectTimer(safeUsername);
   try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
@@ -321,6 +380,11 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
   connections[safeUsername] = ws;
   ws.on('open', function() {
     console.log('✅ Connected: ' + rawUsername);
+    // Successful open — this connection is healthy again, so wipe the
+    // failure count. Otherwise a stream that's been up for days but
+    // had one earlier rough patch would still be sitting on a stale
+    // attempts count from way back.
+    reconnectAttempts[safeUsername] = 0;
     ws._pingInterval = setInterval(function() {
       if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
@@ -335,16 +399,20 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
     if (c === 4404) {
       console.log('ℹ️ [' + safeUsername + '] User is not live — stopping reconnect');
       delete rawUsernames[safeUsername];
+      delete reconnectAttempts[safeUsername];
       return;
     }
     if (c === 4400) {
       console.log('❌ [' + safeUsername + '] Invalid TikTok username (uniqueId rejected) — stopping reconnect, this can never succeed by retrying');
       delete rawUsernames[safeUsername];
+      delete reconnectAttempts[safeUsername];
       return;
     }
     if (c === 4429) {
       console.log('⏳ [' + safeUsername + '] Rate limited — waiting 60s before retry');
-      setTimeout(function() {
+      clearReconnectTimer(safeUsername);
+      reconnectTimers[safeUsername] = setTimeout(function() {
+        delete reconnectTimers[safeUsername];
         if (!connections[safeUsername] && rawUsernames[safeUsername]) {
           console.log('🔄 Rate limit retry: ' + rawUsernames[safeUsername]);
           connectEuler(safeUsername, rawUsernames[safeUsername], true);
@@ -353,12 +421,7 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
       return;
     }
     if (rawUsernames[safeUsername]) {
-      console.log('🔄 Auto-reconnecting ' + rawUsername + ' in 3s...');
-      setTimeout(function() {
-        if (!connections[safeUsername] && rawUsernames[safeUsername]) {
-          connectEuler(safeUsername, rawUsernames[safeUsername], true);
-        }
-      }, 3000);
+      scheduleReconnect(safeUsername, rawUsername);
     }
   });
   ws.on('error', function(e) {
@@ -387,6 +450,10 @@ app.post('/connect', async function(req, res) {
   if (!rawUsername) return res.status(400).send('Missing username');
   const safeUsername = safeKey(rawUsername);
   if (connections[safeUsername]) { console.log('♻️ Replacing:', rawUsername); disconnectSafe(safeUsername); }
+  // A fresh, explicit /connect call means the caller wants this to
+  // start clean — reset the failure counter so an earlier backoff
+  // streak doesn't linger and delay this brand-new attempt.
+  reconnectAttempts[safeUsername] = 0;
   try {
     const ws = connectEuler(safeUsername, rawUsername);
     await new Promise(function(resolve, reject) {
@@ -612,7 +679,7 @@ app.get('/status', function(req, res) {
   else if (isTrying) state = 'reconnecting';
   else state = 'stopped'; // server gave up — user likely isn't live anymore
 
-  res.json({ state: state, username: rawUsername });
+  res.json({ state: state, username: rawUsername, reconnectAttempts: reconnectAttempts[safeUsername] || 0 });
 });
 
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
