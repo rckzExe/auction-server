@@ -331,6 +331,28 @@ const BASE_RECONNECT_DELAY = 3000;
 const MAX_RECONNECT_DELAY  = 120000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+// A connection has to stay open this long before we trust it as
+// "actually healthy" and reset the backoff counter. Without this, a
+// connection that opens successfully but then dies almost immediately
+// (e.g. EulerStream itself erroring right after the handshake, like a
+// 1011 "Failed to route ... threw: Cannot read properties of ..."
+// server-side error) would reset reconnectAttempts to 0 on every
+// single open, so MAX_RECONNECT_ATTEMPTS could never actually trigger
+// — it's an infinite flapping loop that looks like backoff but isn't.
+const STABLE_CONNECTION_MS = 20000;
+
+// Hard backstop, independent of all the logic above. No matter what
+// close codes come back or how open/close timing plays out, this
+// physically cannot spend more than WINDOW_MAX_ATTEMPTS EulerStream
+// requests per streamer per WINDOW_MS. If that's exceeded, force a
+// cooldown — this is the guarantee, everything else is just trying
+// to behave well before it's needed.
+const attemptWindow = {};              // safeUsername -> array of attempt timestamps
+const cooldownUntil  = {};             // safeUsername -> timestamp attempts are blocked until
+const WINDOW_MS            = 10 * 60 * 1000; // 10 minutes
+const WINDOW_MAX_ATTEMPTS  = 15;             // max EulerStream connection attempts per window
+const WINDOW_COOLDOWN_MS   = 15 * 60 * 1000; // forced cooldown once the cap is hit
+
 function clearReconnectTimer(safeUsername) {
   if (reconnectTimers[safeUsername]) {
     clearTimeout(reconnectTimers[safeUsername]);
@@ -369,8 +391,34 @@ function disconnectSafe(safeUsername) {
   try { const ws = connections[safeUsername]; if (ws) ws.close(); } catch (e) {}
   delete connections[safeUsername];
 }
+
+// Full reset — an explicit /connect should behave like a genuinely
+// fresh start, not be held back by an earlier cooldown/attempt window.
+function resetAttemptState(safeUsername) {
+  delete attemptWindow[safeUsername];
+  delete cooldownUntil[safeUsername];
+}
 const rawUsernames = {};
 function connectEuler(safeUsername, rawUsername, isReconnect) {
+  const now = Date.now();
+
+  if (cooldownUntil[safeUsername] && now < cooldownUntil[safeUsername]) {
+    console.error('🧊 [' + safeUsername + '] In forced cooldown until ' + new Date(cooldownUntil[safeUsername]).toISOString() + ' — refusing to spend more EulerStream requests. Call /connect once the underlying issue is fixed to reset this.');
+    return null;
+  }
+
+  const log = (attemptWindow[safeUsername] || []).filter(function(t) { return now - t < WINDOW_MS; });
+  log.push(now);
+  attemptWindow[safeUsername] = log;
+  if (log.length > WINDOW_MAX_ATTEMPTS) {
+    console.error('🛑 [' + safeUsername + '] Hit ' + WINDOW_MAX_ATTEMPTS + ' EulerStream attempts in 10 minutes — forcing a 15 min cooldown to protect your quota. This usually means EulerStream itself is erroring for this account, not a normal connectivity blip.');
+    cooldownUntil[safeUsername] = now + WINDOW_COOLDOWN_MS;
+    delete rawUsernames[safeUsername];
+    delete reconnectAttempts[safeUsername];
+    clearReconnectTimer(safeUsername);
+    return null;
+  }
+
   const apiKey = process.env.SIGN_API_KEY || '';
   const url    = 'wss://ws.eulerstream.com?uniqueId=' + encodeURIComponent(rawUsername) + '&apiKey=' + encodeURIComponent(apiKey);
   rawUsernames[safeUsername] = rawUsername;
@@ -380,11 +428,14 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
   connections[safeUsername] = ws;
   ws.on('open', function() {
     console.log('✅ Connected: ' + rawUsername);
-    // Successful open — this connection is healthy again, so wipe the
-    // failure count. Otherwise a stream that's been up for days but
-    // had one earlier rough patch would still be sitting on a stale
-    // attempts count from way back.
-    reconnectAttempts[safeUsername] = 0;
+    // NOTE: we deliberately do NOT reset reconnectAttempts here anymore.
+    // Resetting on every open (instead of on a connection that actually
+    // stays up) is what let a flapping connection — opens fine, then
+    // EulerStream itself errors out a second later — reconnect forever
+    // without the attempt cap ever engaging. The reset now happens in
+    // the close handler below, and only if the connection was open for
+    // at least STABLE_CONNECTION_MS.
+    ws._openedAt = Date.now();
     ws._pingInterval = setInterval(function() {
       if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
@@ -396,6 +447,15 @@ function connectEuler(safeUsername, rawUsername, isReconnect) {
     console.log('⚠️ [' + safeUsername + '] WS closed: ' + c + ' ' + reason);
     if (ws._pingInterval) clearInterval(ws._pingInterval);
     delete connections[safeUsername];
+
+    const uptime = ws._openedAt ? (Date.now() - ws._openedAt) : 0;
+    if (uptime >= STABLE_CONNECTION_MS) {
+      // Actually stayed up for a meaningful stretch — genuinely healthy,
+      // safe to wipe the failure count now.
+      reconnectAttempts[safeUsername] = 0;
+    } else if (ws._openedAt) {
+      console.log('⚡ [' + safeUsername + '] Connection died after only ' + Math.round(uptime / 1000) + 's — treating as a failure, not resetting backoff');
+    }
     if (c === 4404) {
       console.log('ℹ️ [' + safeUsername + '] User is not live — stopping reconnect');
       delete rawUsernames[safeUsername];
@@ -454,8 +514,12 @@ app.post('/connect', async function(req, res) {
   // start clean — reset the failure counter so an earlier backoff
   // streak doesn't linger and delay this brand-new attempt.
   reconnectAttempts[safeUsername] = 0;
+  resetAttemptState(safeUsername);
   try {
     const ws = connectEuler(safeUsername, rawUsername);
+    if (!ws) {
+      return res.status(429).send('This streamer is in a forced cooldown right now (too many recent EulerStream attempts, likely an EulerStream-side error repeating) — check the server logs, then try again shortly.');
+    }
     await new Promise(function(resolve, reject) {
       const t = setTimeout(function() { reject(new Error('Timeout')); }, 10000);
       ws.once('open',  function()  { clearTimeout(t); resolve(); });
@@ -673,13 +737,20 @@ app.get('/status', function(req, res) {
   const ws = connections[safeUsername];
   const isOpen = !!(ws && ws.readyState === WebSocket.OPEN);
   const isTrying = !!rawUsernames[safeUsername];
+  const inCooldown = !!(cooldownUntil[safeUsername] && Date.now() < cooldownUntil[safeUsername]);
 
   let state;
-  if (isOpen) state = 'connected';
+  if (inCooldown) state = 'cooldown'; // hit the 10-min attempt cap — see server logs
+  else if (isOpen) state = 'connected';
   else if (isTrying) state = 'reconnecting';
   else state = 'stopped'; // server gave up — user likely isn't live anymore
 
-  res.json({ state: state, username: rawUsername, reconnectAttempts: reconnectAttempts[safeUsername] || 0 });
+  res.json({
+    state: state,
+    username: rawUsername,
+    reconnectAttempts: reconnectAttempts[safeUsername] || 0,
+    cooldownUntil: inCooldown ? cooldownUntil[safeUsername] : null
+  });
 });
 
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
