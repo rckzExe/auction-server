@@ -754,7 +754,7 @@ app.get('/status', function(req, res) {
 });
 
 app.get('/health',           function(req, res) { res.json({ status: 'ok', connections: Object.keys(connections).length }); });
-app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz2026' }); });
+app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz4K' }); });
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
 process.on('uncaughtException',  function(e) { console.error('⚠️ Uncaught:',  e && e.message || e); });
 const PORT = process.env.PORT || 3000;
