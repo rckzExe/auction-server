@@ -109,6 +109,10 @@ app.post('/moderator-token', async function(req, res) {
 
 const connections    = {};
 const processed      = new Set();
+// Tracks which gift ids have already gotten a "no icon URL matched"
+// debug log, so a gift with no match doesn't spam that line on every
+// single send -- just once per distinct gift.
+const seenGiftIconLogKeys = new Set();
 const processedChats = new Set();
 const giftBuffer     = {};
 const vouchCooldown  = {};
@@ -197,6 +201,40 @@ async function handleGift(safeUsername, data) {
     const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
     const repeatEnd   = data.repeatEnd;
 
+    // ── REAL GIFT ICON URL ──
+    // Our local overlay only has custom art for ~50 specific gifts --
+    // anything else (which is most of what real viewers actually
+    // send) has no local icon at all. Using TikTok's own icon for the
+    // gift, sent along with the gift message itself, covers every
+    // gift accurately instead of only the ones we happen to have
+    // local art for. The exact field EulerStream puts this under
+    // isn't 100% pinned down, so this tries several likely shapes in
+    // order and logs (once per distinct gift, not spammed per
+    // message) what fields actually showed up, so a real payload is
+    // available to check if none of these paths hit.
+    function extractGiftIconUrl(d) {
+      try {
+        if (d.giftImage && d.giftImage.giftPictureUrl && d.giftImage.giftPictureUrl.urlListList) {
+          return d.giftImage.giftPictureUrl.urlListList[0] || '';
+        }
+        if (d.giftImage && d.giftImage.giftPictureUrl && d.giftImage.giftPictureUrl.urlList) {
+          return d.giftImage.giftPictureUrl.urlList[0] || '';
+        }
+        if (d.giftPictureUrl && d.giftPictureUrl.urlList) return d.giftPictureUrl.urlList[0] || '';
+        if (d.image && d.image.urlList) return d.image.urlList[0] || '';
+        if (d.image && d.image.url_list) return d.image.url_list[0] || '';
+        if (typeof d.giftPictureUrl === 'string') return d.giftPictureUrl;
+        if (typeof d.icon === 'string') return d.icon;
+        if (d.icon && d.icon.urlList) return d.icon.urlList[0] || '';
+      } catch (e) {}
+      return '';
+    }
+    const giftIconUrl = extractGiftIconUrl(details);
+    if (!giftIconUrl && details.giftId && !seenGiftIconLogKeys.has(details.giftId)) {
+      seenGiftIconLogKeys.add(details.giftId);
+      console.log('🖼️ No icon URL matched for gift "' + giftName + '" (id ' + details.giftId + ') -- giftDetails keys: ' + Object.keys(details).join(', '));
+    }
+
     // ── OVERLAY LIVE GIFT BROADCAST ──
     // Independent of the Auction Board / Spin Royale logic below,
     // which requires an *active* auction in Firebase to do anything
@@ -213,6 +251,7 @@ async function handleGift(safeUsername, data) {
         avatarUrl: photo,
         giftName: details.giftName || '',
         giftId: details.giftId || null,
+        giftIconUrl: giftIconUrl,
         diamondCount: diamondCount,
         repeatCount: repeatCount,
         value: (diamondCount > 0 ? diamondCount : 1) * repeatCount
