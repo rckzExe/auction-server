@@ -2,8 +2,47 @@ const express   = require('express');
 const admin     = require('firebase-admin');
 const WebSocket = require('ws');
 const crypto    = require('crypto');
+const http      = require('http');
+const { Server } = require('socket.io');
 const app = express();
 app.use(express.json());
+
+// HTTP server wrapping the express app, plus a Socket.IO server
+// layered on top of it (same port as everything else — no separate
+// process, no separate port to open/forward). This is purely additive
+// -- nothing below that used `app` for routes changes; only the final
+// `.listen()` call at the bottom moves from `app` to `server`, and
+// live gift broadcasting (further down, in handleGift) uses `io`.
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*' }
+});
+
+// ══════════════════════════════════════════════════════════════
+// 📡 LIVE GIFT BROADCAST (for the RCKZ Overlay app)
+// ══════════════════════════════════════════════════════════════
+// A client (the Electron overlay app) connects and sends
+// `watch-gifts` with the TikTok username it wants to watch. It's
+// dropped into a room named by that streamer's safeKey, and every
+// gift counted for that streamer (see the broadcast inside
+// handleGift below) gets emitted to everyone in that room. A socket
+// only ever watches one streamer at a time -- sending `watch-gifts`
+// again with a different username swaps it over.
+io.on('connection', function(socket) {
+  socket.on('watch-gifts', function(payload) {
+    const rawUsername = payload && payload.username;
+    if (!rawUsername) return;
+
+    const room = safeKey(rawUsername);
+
+    Array.from(socket.rooms).forEach(function(r) {
+      if (r !== socket.id) socket.leave(r);
+    });
+
+    socket.join(room);
+    console.log('👀 Client ' + socket.id + ' watching gifts for ' + rawUsername);
+  });
+});
 
 // Your app's windows load as file:// pages, and browsers block
 // cross-origin fetch() calls by default unless the server explicitly
@@ -157,6 +196,28 @@ async function handleGift(safeUsername, data) {
 
     const giftTypeVal = data.giftType || (data.giftDetails && data.giftDetails.giftType) || 0;
     const repeatEnd   = data.repeatEnd;
+
+    // ── OVERLAY LIVE GIFT BROADCAST ──
+    // Independent of the Auction Board / Spin Royale logic below,
+    // which requires an *active* auction in Firebase to do anything
+    // at all -- the overlay app just wants every real, "finished"
+    // gift send as it happens, for whoever's watching this streamer's
+    // room, regardless of whether any auction is running. Uses the
+    // same streak semantics as the rest of this function (skip
+    // mid-streak repeatEnd:false messages, only broadcast once a
+    // streak actually ends, or immediately for non-streakable gifts)
+    // so a held-down Rose doesn't spam a popup per partial tap.
+    if (!(giftTypeVal === 1 && (repeatEnd === 0 || repeatEnd === false))) {
+      io.to(safeUsername).emit('gift', {
+        username: rawUser,
+        avatarUrl: photo,
+        giftName: details.giftName || '',
+        giftId: details.giftId || null,
+        diamondCount: diamondCount,
+        repeatCount: repeatCount,
+        value: (diamondCount > 0 ? diamondCount : 1) * repeatCount
+      });
+    }
 
     const snap    = await db.ref('auctions/' + safeUsername).once('value');
     const auction = snap.val();
@@ -758,4 +819,4 @@ app.get('/overlay-password', function(req, res) { res.json({ password: 'rckz4K' 
 process.on('unhandledRejection', function(r) { console.error('⚠️ Unhandled:', r && r.message || r); });
 process.on('uncaughtException',  function(e) { console.error('⚠️ Uncaught:',  e && e.message || e); });
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, function() { console.log('🌐 Server running on port ' + PORT); });
+server.listen(PORT, function() { console.log('🌐 Server running on port ' + PORT); });
